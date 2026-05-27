@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { SceneKey } from './sceneKeys';
 import { load } from '../core/storage';
 import { migrationsSelfTest } from '../core/migrations';
+import { coreSelfTest } from '../core/selfTest';
 
 // Точка инициализации. Пока ассетов нет — сразу уходим в базовую сцену.
 // Позже здесь будет загрузка atlas/spine/audio и инициализация сейва.
@@ -14,7 +15,8 @@ export class BootScene extends Phaser.Scene {
     if (import.meta.env.DEV) {
       try {
         migrationsSelfTest();
-        console.info('[migrations] self-test OK');
+        coreSelfTest();
+        console.info('[selftest] migrations + core OK');
       } catch (e) {
         console.error(e);
       }

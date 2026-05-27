@@ -4,14 +4,15 @@
 
 import type { SaveState } from '../types';
 import { getCurrentSchemaVersion, runMigrations } from './migrations';
+import { balance } from '../config/balance';
 
 const STORAGE_KEY = 'zm_save';
 
 export function DEFAULT_STATE(): SaveState {
   return {
     schemaVersion: getCurrentSchemaVersion(),
-    scrap: 0,
-    diamonds: 0,
+    scrap: balance.economy.startScrap,
+    diamonds: balance.economy.startDiamonds,
     level: 1,
     maxLevelReached: 1,
     workshopTier: 1,

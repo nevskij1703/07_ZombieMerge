@@ -65,3 +65,26 @@ export function battleSelfTest(): void {
   const lose = simulateBattle(lvl, lvl.lanes.map(() => []), { workshopTier: 1 });
   assert(!lose.passed, 'empty arsenal fails when zombies present');
 }
+
+/** Целостность генерации 50 уровней MVP: поле не убывает, состав корректен. */
+export function levelSanityTest(): void {
+  const assert = (cond: boolean, msg: string): void => {
+    if (!cond) throw new Error('[levels] self-test: ' + msg);
+  };
+
+  let prevSize = 0;
+  for (let L = 1; L <= 50; L++) {
+    const lvl = generateLevel(L);
+    assert(lvl.lanes.length === lvl.cols, `lvl${L}: lanes == cols`);
+    assert(lvl.cols >= 2 && lvl.rows >= 2, `lvl${L}: field >= 2x2`);
+    const size = lvl.cols * lvl.rows;
+    assert(size >= prevSize, `lvl${L}: field non-decreasing`);
+    prevSize = size;
+  }
+
+  // На 1-м уровне только слабые зомби (medium/strong появляются позже).
+  const onlyWeak = generateLevel(1).lanes.every((ln) =>
+    ln.obstacles.every((o) => o.kind !== 'zombie' || o.zombieKind === 'weak'),
+  );
+  assert(onlyWeak, 'lvl1 only weak zombies');
+}

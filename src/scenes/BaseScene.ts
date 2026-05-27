@@ -4,11 +4,12 @@ import { DESIGN_WIDTH, COLORS } from '../config/constants';
 import { getState, save, update } from '../core/storage';
 import { produceCost, canAfford } from '../core/economy';
 import { weaponName } from '../core/weapons';
-import { placeFirstFree, isFull } from '../core/merge';
+import { placeFirstFree, isFull, pullFromInventory } from '../core/merge';
 import { generateLevel } from '../core/levelGen';
 import { laneArsenals } from '../core/progression';
 import { Hud } from '../ui/hud';
 import { MergeBoard } from '../ui/mergeBoard';
+import { InventoryBar } from '../ui/inventoryBar';
 import { Button } from '../ui/button';
 
 // Главный экран базы: HUD + мердж-поле + Мастерская (произвести) + кнопка «В бой».
@@ -16,6 +17,7 @@ import { Button } from '../ui/button';
 export class BaseScene extends Phaser.Scene {
   private hud!: Hud;
   private board!: MergeBoard;
+  private inv!: InventoryBar;
   private produceBtn!: Button;
   private battleBtn!: Button;
 
@@ -44,15 +46,22 @@ export class BaseScene extends Phaser.Scene {
     this.board = new MergeBoard(
       this,
       s.field,
-      { x: 40, y: 470, w: DESIGN_WIDTH - 80, h: 470 },
+      { x: 40, y: 465, w: DESIGN_WIDTH - 80, h: 410 },
       {
         onChange: () => {
           save();
           this.hud.refresh();
           this.refreshButtons();
+          this.inv?.rebuild();
         },
         onMerge: () => update((st) => st.stats.merges++),
       },
+    );
+
+    this.inv = new InventoryBar(
+      this,
+      { x: 30, y: 885, w: DESIGN_WIDTH - 60, h: 74 },
+      (i) => this.pullItem(i),
     );
 
     this.produceBtn = new Button(this, {
@@ -98,6 +107,18 @@ export class BaseScene extends Phaser.Scene {
     this.board.rebuildTiles();
     this.hud.refresh();
     this.refreshButtons();
+  }
+
+  private pullItem(index: number): void {
+    const s = getState();
+    if (pullFromInventory(s.field, s.inventory, index)) {
+      save();
+      this.board.rebuildTiles();
+      this.inv.rebuild();
+      this.refreshButtons();
+    } else {
+      this.toast('Поле заполнено');
+    }
   }
 
   private goBattle(): void {

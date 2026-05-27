@@ -45,6 +45,8 @@ export interface LevelGenConfig {
   /** Вероятность (0..1) что слот препятствия — ящик (а не зомби). */
   crateChance: number;
   crateHp: number;
+  /** Вероятность (0..1) что разбитый ящик роняет оружие (иначе только лом). */
+  crateWeaponChance: number;
   /** Сколько куч металлолома на дороге и сколько в каждой. */
   scrapPilesMin: number;
   scrapPilesMax: number;
@@ -134,6 +136,7 @@ export const balance: Balance = {
     strongFromLevel: 16,
     crateChance: 0.18,
     crateHp: 12,
+    crateWeaponChance: 0.3,
     scrapPilesMin: 1,
     scrapPilesMax: 3,
     scrapPerPile: 8,

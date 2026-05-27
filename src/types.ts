@@ -37,3 +37,62 @@ export interface SaveState {
   settings: Settings;
   stats: Stats;
 }
+
+// --- Уровень / бой ---
+
+export type ObstacleKind = 'zombie' | 'crate' | 'scrap';
+
+export interface Obstacle {
+  kind: ObstacleKind;
+  hp: number; // hp зомби/ящика; 0 для кучи лома
+  zombieKind?: ZombieKind;
+  scrap: number; // сколько лома даёт (куча или лут из ящика)
+  weapon: boolean; // ящик роняет оружие
+}
+
+export interface ChestDef {
+  scrap: number;
+  weapon: boolean;
+  blueprint: boolean;
+}
+
+export interface Lane {
+  obstacles: Obstacle[];
+  chest: ChestDef;
+}
+
+export interface Level {
+  number: number;
+  cols: number; // число линий = ширина поля для этого уровня
+  rows: number;
+  roadLength: number;
+  lanes: Lane[];
+}
+
+/** Шаг прохождения линии — для проигрыша боя в BattleScene и подсчёта наград. */
+export interface LaneStep {
+  index: number; // индекс препятствия, либо -1 для сундука
+  kind: ObstacleKind | 'chest';
+  outcome: 'cleared' | 'picked' | 'opened' | 'stuck';
+  hitsSpent: number; // для тайминга анимации
+  scrap: number;
+  weaponTier?: number;
+  blueprint?: boolean;
+}
+
+export interface LaneResult {
+  reachedChest: boolean;
+  steps: LaneStep[];
+  collectedScrap: number;
+  collectedWeapons: WeaponTier[];
+  blueprint: boolean;
+}
+
+export interface BattleResult {
+  level: number;
+  passed: boolean; // дошёл хотя бы один боец
+  lanes: LaneResult[];
+  totalScrap: number;
+  totalWeapons: WeaponTier[];
+  blueprints: number;
+}

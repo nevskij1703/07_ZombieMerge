@@ -5,6 +5,8 @@ import { getState, save, update } from '../core/storage';
 import { produceCost, canAfford } from '../core/economy';
 import { weaponName } from '../core/weapons';
 import { placeFirstFree, isFull } from '../core/merge';
+import { generateLevel } from '../core/levelGen';
+import { laneArsenals } from '../core/progression';
 import { Hud } from '../ui/hud';
 import { MergeBoard } from '../ui/mergeBoard';
 import { Button } from '../ui/button';
@@ -105,8 +107,11 @@ export class BaseScene extends Phaser.Scene {
       this.toast('Сначала собери оружие');
       return;
     }
-    // TODO (этап 9): запуск BattleScene с раскладкой по столбцам.
-    this.toast('Бой — на этапе 9');
+    this.scene.start(SceneKey.Battle, {
+      level: generateLevel(s.level),
+      arsenals: laneArsenals(s.field),
+      workshopTier: s.workshopTier,
+    });
   }
 
   private refreshButtons(): void {

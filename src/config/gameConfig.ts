@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { DESIGN_WIDTH, DESIGN_HEIGHT, COLORS } from './constants';
 import { BootScene } from '../scenes/BootScene';
 import { BaseScene } from '../scenes/BaseScene';
+import { BattleScene } from '../scenes/BattleScene';
 
 export const gameConfig: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
@@ -17,5 +18,5 @@ export const gameConfig: Phaser.Types.Core.GameConfig = {
     antialias: true,
     roundPixels: false,
   },
-  scene: [BootScene, BaseScene],
+  scene: [BootScene, BaseScene, BattleScene],
 };

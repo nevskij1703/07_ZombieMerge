@@ -20,8 +20,13 @@ const css = (el: HTMLElement, style: string): void => {
 
 function refreshGame(game: Phaser.Game): void {
   // Перерисовать активный экран после изменения сейва/баланса (без полной перезагрузки).
-  const base = game.scene.getScene('Base');
-  if (base) base.scene.restart();
+  for (const key of ['Battle', 'Base']) {
+    const sc = game.scene.getScene(key);
+    if (sc && sc.scene.isActive()) {
+      sc.scene.restart();
+      return;
+    }
+  }
 }
 
 function btn(label: string, id: string): HTMLButtonElement {

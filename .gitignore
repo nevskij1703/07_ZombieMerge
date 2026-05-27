@@ -1,0 +1,17 @@
+# dependencies & build output
+node_modules/
+dist/
+.vite/
+
+# logs
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# editor / OS
+.DS_Store
+Thumbs.db
+*.swp
+
+# local git worktrees (Claude Code)
+.claude/worktrees/

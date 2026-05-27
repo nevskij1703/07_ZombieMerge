@@ -1,0 +1,56 @@
+// Реестр миграций сейва. Каждая запись N: (state) => state преобразует v(N-1) -> vN.
+// getCurrentSchemaVersion авто-выводится из max(ключей) — НЕ дублируется константой.
+// См. docs/SAVES.md.
+
+type MigrationFn = (state: any) => any;
+
+export const migrations: Record<number, MigrationFn> = {
+  // v0 -> v1: проект новый, legacy-хранилища нет. Identity.
+  1: (state) => state,
+};
+
+export function getCurrentSchemaVersion(): number {
+  const keys = Object.keys(migrations).map(Number);
+  return keys.length ? Math.max(...keys) : 1;
+}
+
+export function runMigrations(
+  state: any,
+  fromVersion: number,
+): { state: any; schemaVersion: number } {
+  const current = getCurrentSchemaVersion();
+  let v = typeof fromVersion === 'number' ? fromVersion : 0;
+  while (v < current) {
+    const fn = migrations[v + 1];
+    if (typeof fn !== 'function') {
+      throw new Error(
+        `[migrations] Missing migration ${v + 1} (target schemaVersion=${current})`,
+      );
+    }
+    state = fn(state);
+    v++;
+  }
+  return { state, schemaVersion: current };
+}
+
+/**
+ * Dev-only self-test: реестр идёт подряд 1..N без дыр, и пустой сейв с любой
+ * стартовой версии каскадно доходит до текущей. Бросает при проблеме.
+ * Тот же инвариант проверяет skill `prepare-release-candidate` перед сборкой.
+ */
+export function migrationsSelfTest(): void {
+  const current = getCurrentSchemaVersion();
+  for (let n = 1; n <= current; n++) {
+    if (typeof migrations[n] !== 'function') {
+      throw new Error(`[migrations] self-test: missing migration ${n}`);
+    }
+  }
+  for (let from = 0; from <= current; from++) {
+    const res = runMigrations({ schemaVersion: from }, from);
+    if (res.schemaVersion !== current) {
+      throw new Error(
+        `[migrations] self-test: from ${from} -> ${res.schemaVersion}, expected ${current}`,
+      );
+    }
+  }
+}

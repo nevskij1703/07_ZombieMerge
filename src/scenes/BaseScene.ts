@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { SceneKey } from './sceneKeys';
 import { DESIGN_WIDTH, DESIGN_HEIGHT, COLORS } from '../config/constants';
+import { getState } from '../core/storage';
 
 // Главный экран базы (вид сверху). Пока — заглушка-каркас на примитивах,
 // чтобы убедиться что рендер и масштабирование работают. Мердж-поле, Мастерская,
@@ -28,12 +29,18 @@ export class BaseScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
+    const s = getState();
     this.add
-      .text(cx, DESIGN_HEIGHT / 2 + 120, 'каркас работает', {
-        fontFamily: 'monospace',
-        fontSize: '30px',
-        color: '#cccccc',
-      })
+      .text(
+        cx,
+        DESIGN_HEIGHT / 2 + 120,
+        `сейв OK · уровень ${s.level} · лом ${s.scrap}`,
+        {
+          fontFamily: 'monospace',
+          fontSize: '26px',
+          color: '#cccccc',
+        },
+      )
       .setOrigin(0.5);
   }
 }

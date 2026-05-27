@@ -1,12 +1,22 @@
 import Phaser from 'phaser';
 import { SceneKey } from './sceneKeys';
-import { DESIGN_WIDTH, DESIGN_HEIGHT, COLORS } from '../config/constants';
-import { getState } from '../core/storage';
+import { DESIGN_WIDTH, COLORS } from '../config/constants';
+import { getState, save, update } from '../core/storage';
+import { produceCost, canAfford } from '../core/economy';
+import { weaponName } from '../core/weapons';
+import { placeFirstFree, isFull } from '../core/merge';
+import { Hud } from '../ui/hud';
+import { MergeBoard } from '../ui/mergeBoard';
+import { Button } from '../ui/button';
 
-// Главный экран базы (вид сверху). Пока — заглушка-каркас на примитивах,
-// чтобы убедиться что рендер и масштабирование работают. Мердж-поле, Мастерская,
-// HUD и кнопка «В бой» появятся на этапах 5–6.
+// Главный экран базы: HUD + мердж-поле + Мастерская (произвести) + кнопка «В бой».
+// Бой (BattleScene) подключится на этапе 9 — сейчас кнопка-заглушка.
 export class BaseScene extends Phaser.Scene {
+  private hud!: Hud;
+  private board!: MergeBoard;
+  private produceBtn!: Button;
+  private battleBtn!: Button;
+
   constructor() {
     super(SceneKey.Base);
   }
@@ -14,33 +24,116 @@ export class BaseScene extends Phaser.Scene {
   create(): void {
     const cx = DESIGN_WIDTH / 2;
 
-    // Зоны экрана: город (сверху) / забор / база (снизу).
-    this.add.rectangle(cx, 200, DESIGN_WIDTH, 400, COLORS.city).setOrigin(0.5);
-    this.add.rectangle(cx, 410, DESIGN_WIDTH, 20, COLORS.fence).setOrigin(0.5);
+    // Фон-зоны: город (зона боя) / забор / база.
+    this.add.rectangle(cx, 250, DESIGN_WIDTH, 340, COLORS.city).setOrigin(0.5);
+    this.add.rectangle(cx, 430, DESIGN_WIDTH, 16, COLORS.fence).setOrigin(0.5);
+    this.add.rectangle(cx, 855, DESIGN_WIDTH, 850, COLORS.base).setOrigin(0.5);
     this.add
-      .rectangle(cx, DESIGN_HEIGHT - 320, DESIGN_WIDTH, 640, COLORS.base)
-      .setOrigin(0.5);
-
-    this.add
-      .text(cx, 90, 'ZombieMerge', {
+      .text(cx, 250, 'ГОРОД · зона боя (этап 9)', {
         fontFamily: 'monospace',
-        fontSize: '52px',
-        color: '#9fe870',
+        fontSize: '22px',
+        color: '#5c7a5c',
       })
       .setOrigin(0.5);
 
+    this.hud = new Hud(this);
+
     const s = getState();
-    this.add
-      .text(
-        cx,
-        DESIGN_HEIGHT / 2 + 120,
-        `сейв OK · уровень ${s.level} · лом ${s.scrap}`,
-        {
-          fontFamily: 'monospace',
-          fontSize: '26px',
-          color: '#cccccc',
+    this.board = new MergeBoard(
+      this,
+      s.field,
+      { x: 40, y: 470, w: DESIGN_WIDTH - 80, h: 470 },
+      {
+        onChange: () => {
+          save();
+          this.hud.refresh();
+          this.refreshButtons();
         },
-      )
-      .setOrigin(0.5);
+        onMerge: () => update((st) => st.stats.merges++),
+      },
+    );
+
+    this.produceBtn = new Button(this, {
+      x: cx,
+      y: 1010,
+      width: 470,
+      height: 78,
+      label: '',
+      fontSize: 26,
+      onClick: () => this.produce(),
+    });
+
+    this.battleBtn = new Button(this, {
+      x: cx,
+      y: 1112,
+      width: 470,
+      height: 78,
+      label: 'В БОЙ',
+      fontSize: 30,
+      bg: 0xb23b3b,
+      onClick: () => this.goBattle(),
+    });
+    void this.battleBtn;
+
+    this.refreshButtons();
+  }
+
+  private produce(): void {
+    const s = getState();
+    const cost = produceCost(s.workshopTier);
+    if (!canAfford(s.scrap, cost)) {
+      this.toast('Не хватает лома');
+      return;
+    }
+    if (isFull(s.field)) {
+      this.toast('Поле заполнено');
+      return;
+    }
+    update((st) => {
+      st.scrap -= cost;
+      placeFirstFree(st.field, st.workshopTier);
+    });
+    this.board.rebuildTiles();
+    this.hud.refresh();
+    this.refreshButtons();
+  }
+
+  private goBattle(): void {
+    const s = getState();
+    const hasWeapon = s.field.cells.some((c) => c != null);
+    if (!hasWeapon) {
+      this.toast('Сначала собери оружие');
+      return;
+    }
+    // TODO (этап 9): запуск BattleScene с раскладкой по столбцам.
+    this.toast('Бой — на этапе 9');
+  }
+
+  private refreshButtons(): void {
+    const s = getState();
+    const cost = produceCost(s.workshopTier);
+    this.produceBtn.setLabel(`Произвести: ${weaponName(s.workshopTier)} (${cost})`);
+    this.produceBtn.setEnabled(canAfford(s.scrap, cost) && !isFull(s.field));
+  }
+
+  private toast(msg: string): void {
+    const t = this.add
+      .text(DESIGN_WIDTH / 2, 1230, msg, {
+        fontFamily: 'monospace',
+        fontSize: '24px',
+        color: '#ffd27f',
+        backgroundColor: '#000000aa',
+        padding: { x: 12, y: 7 },
+      })
+      .setOrigin(0.5)
+      .setDepth(1000);
+    this.tweens.add({
+      targets: t,
+      alpha: 0,
+      y: 1195,
+      duration: 1100,
+      delay: 600,
+      onComplete: () => t.destroy(),
+    });
   }
 }

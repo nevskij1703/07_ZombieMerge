@@ -1,0 +1,12 @@
+{
+  "_comment": "Build-time настройки. Skill `prepare-release-candidate` показывает значения перед сборкой и спрашивает подтверждение. Skill `build-apk-from-html` при первой сборке спрашивает orientation/immersive/statusBarStyle если они null.",
+  "appName": "ZombieMerge",
+  "appId": "com.terekh.zombiemerge",
+  "iconPath": "Store_Info/icon.png",
+  "orientation": "portrait",
+  "immersive": true,
+  "statusBarStyle": "light",
+  "rustoreReviewSdk": false,
+  "minSdk": null,
+  "targetSdk": null
+}

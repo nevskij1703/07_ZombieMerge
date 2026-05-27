@@ -1,0 +1,7 @@
+{
+  "_comment": "Состояние последнего опубликованного в РуСтор релиза. Обновляется автоматически skill'ом `prepare-release-candidate` после подтверждения отправки в стор. Пока ничего не публиковали.",
+  "lastPublishedSchemaVersion": 0,
+  "lastPublishedVersionCode": null,
+  "lastPublishedVersionName": null,
+  "lastPublishedAt": null
+}

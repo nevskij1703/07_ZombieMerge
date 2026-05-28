@@ -5,8 +5,7 @@ import { getState, save, update } from '../core/storage';
 import { produceCost, canAfford } from '../core/economy';
 import { weaponName } from '../core/weapons';
 
-import { produceInto, isFull, pullFromInventory } from '../core/merge';
-import { canMergeTier } from '../core/weapons';
+import { placeFirstFree, isFull, pullFromInventory } from '../core/merge';
 import { generateLevel } from '../core/levelGen';
 import { laneArsenals } from '../core/progression';
 import { Hud } from '../ui/hud';
@@ -98,18 +97,14 @@ export class BaseScene extends Phaser.Scene {
       this.toast('Не хватает лома');
       return;
     }
-    let placed = false;
-    update((st) => {
-      if (produceInto(st.field, st.workshopTier)) {
-        st.scrap -= cost;
-        placed = true;
-      }
-    });
-    if (!placed) {
-      // на максимально-тировом поле без свободных слотов и без совпадений мердж невозможен
-      this.toast('Поле заполнено, негде разместить');
+    if (isFull(s.field)) {
+      this.toast('Поле заполнено');
       return;
     }
+    update((st) => {
+      st.scrap -= cost;
+      placeFirstFree(st.field, st.workshopTier);
+    });
     this.board.rebuildTiles();
     this.hud.refresh();
     this.refreshButtons();
@@ -145,11 +140,7 @@ export class BaseScene extends Phaser.Scene {
     const s = getState();
     const cost = produceCost(s.workshopTier);
     this.produceBtn.setLabel(`Произвести: ${weaponName(s.workshopTier)} (${cost})`);
-    // Можно произвести если есть свободная клетка ИЛИ можно слить с такой же на полном поле.
-    const canPlace =
-      !isFull(s.field) ||
-      (canMergeTier(s.workshopTier) && s.field.cells.includes(s.workshopTier));
-    this.produceBtn.setEnabled(canAfford(s.scrap, cost) && canPlace);
+    this.produceBtn.setEnabled(canAfford(s.scrap, cost) && !isFull(s.field));
   }
 
   private toast(msg: string): void {

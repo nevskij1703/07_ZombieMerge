@@ -91,18 +91,6 @@ function mergeAnyPair(field: FieldState): boolean {
   return false;
 }
 
-/** Smart-merge с такой же плиткой на полном поле (когда нет свободных клеток). */
-function smartMergeIntoSameTier(field: FieldState, tier: WeaponTier): boolean {
-  if (!canMergeTier(tier)) return false;
-  for (let i = 0; i < field.cells.length; i++) {
-    if (field.cells[i] === tier) {
-      field.cells[i] = nextTier(tier);
-      return true;
-    }
-  }
-  return false;
-}
-
 /** Положить оружие в «самый слабый» столбец (минимальный max-tier, больше свободных клеток). */
 function placeIntoWeakestColumn(field: FieldState, tier: WeaponTier): boolean {
   let bestCol = -1;
@@ -134,14 +122,12 @@ function placeIntoWeakestColumn(field: FieldState, tier: WeaponTier): boolean {
   return false;
 }
 
-/** Достать из инвентаря всё что влезет: на свободные клетки или slr-merge с совпадающим тиром. */
+/** Достать всё что влезет из инвентаря в свободные клетки (бесплатно). */
 function drainInventoryToField(state: SaveState): boolean {
   let changed = false;
-  while (state.inventory.length > 0) {
-    const tier = state.inventory[0];
-    const placed = placeIntoWeakestColumn(state.field, tier) || smartMergeIntoSameTier(state.field, tier);
-    if (!placed) break;
-    state.inventory.shift();
+  while (state.inventory.length > 0 && !isFull(state.field)) {
+    const tier = state.inventory.shift()!;
+    placeIntoWeakestColumn(state.field, tier);
     changed = true;
   }
   return changed;
@@ -155,11 +141,8 @@ function runMergePhase(state: SaveState): number {
     if (mergeAnyPair(state.field)) continue;
 
     const cost = produceCost(state.workshopTier);
-    if (canAfford(state.scrap, cost)) {
-      const placed =
-        placeIntoWeakestColumn(state.field, state.workshopTier) ||
-        smartMergeIntoSameTier(state.field, state.workshopTier);
-      if (placed) {
+    if (canAfford(state.scrap, cost) && !isFull(state.field)) {
+      if (placeIntoWeakestColumn(state.field, state.workshopTier)) {
         state.scrap -= cost;
         produced += 1;
         continue;

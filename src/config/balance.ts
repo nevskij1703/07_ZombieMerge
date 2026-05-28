@@ -146,20 +146,20 @@ export const balance: Balance = {
     crateHp: 12,
     crateWeaponChance: 0.3,
     scrapPilesMin: 1,
-    scrapPilesMax: 3,
-    scrapPerPile: 8,
+    scrapPilesMax: 2,
+    scrapPerPile: 4,
   },
 
   chest: {
-    scrapMin: 20,
-    scrapMax: 60,
+    scrapMin: 10,
+    scrapMax: 25,
     weaponChance: 0.6,
     weaponTierOffset: 1,
     blueprintChance: 0, // апгрейды Цеха детерминированы (workshop.upgradeAtLevels). 0 — нет рандома.
   },
 
   economy: {
-    startScrap: 50,
+    startScrap: 30,
     startDiamonds: 0,
   },
 };

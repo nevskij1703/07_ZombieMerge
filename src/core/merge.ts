@@ -51,23 +51,6 @@ export function placeFirstFree(f: FieldState, tier: WeaponTier): number {
   return i;
 }
 
-/**
- * «Умное» размещение: в свободную клетку, иначе — слить с такой же плиткой на поле
- * (даёт мерджабельную пару с тем что было раньше и спасает от тупиков на малых полях).
- * Возвращает true если поле изменилось.
- */
-export function produceInto(f: FieldState, tier: WeaponTier): boolean {
-  if (placeFirstFree(f, tier) !== -1) return true;
-  if (!canMergeTier(tier)) return false;
-  for (let i = 0; i < f.cells.length; i++) {
-    if (f.cells[i] === tier) {
-      f.cells[i] = nextTier(tier);
-      return true;
-    }
-  }
-  return false;
-}
-
 export function canMergeIndices(f: FieldState, a: number, b: number): boolean {
   if (a === b) return false;
   const ta = f.cells[a];
@@ -93,7 +76,7 @@ export function moveOrSwap(f: FieldState, from: number, to: number): void {
   f.cells[to] = a;
 }
 
-/** Положить лут: на поле в первую свободную, иначе в инвентарь. */
+/** Положить лут: в свободную клетку, иначе в инвентарь. */
 export function addLoot(
   f: FieldState,
   inventory: WeaponTier[],
@@ -104,17 +87,16 @@ export function addLoot(
   return 'inventory';
 }
 
-/**
- * Вынести предмет из инвентаря на поле: в свободную клетку, иначе — слить с такой же
- * плиткой на поле (если поле полно и есть совпадение по тиру). Спасает от тупиков.
- */
+/** Вынести предмет из инвентаря (по индексу) на свободную клетку поля. */
 export function pullFromInventory(
   f: FieldState,
   inventory: WeaponTier[],
   invIndex: number,
 ): boolean {
   if (invIndex < 0 || invIndex >= inventory.length) return false;
-  if (!produceInto(f, inventory[invIndex])) return false;
+  const free = firstFreeIndex(f);
+  if (free === -1) return false;
+  f.cells[free] = inventory[invIndex];
   inventory.splice(invIndex, 1);
   return true;
 }

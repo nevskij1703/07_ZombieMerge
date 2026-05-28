@@ -29,7 +29,7 @@ export interface ChestReward {
   weaponChance: number;
   /** Тир оружия из сундука = workshopTier + этот сдвиг. */
   weaponTierOffset: number;
-  /** Шанс (0..1) чертежа (апгрейд тира Мастерской). */
+  /** Шанс (0..1) случайного чертежа в сундуке — редкий бонус. */
   blueprintChance: number;
 }
 
@@ -60,6 +60,12 @@ export interface Balance {
     startTier: number;
     /** Цена спавна оружия тира T в металлоломе. */
     produceCostByTier: Record<number, number>;
+    /**
+     * Уровни, после прохождения которых Цех ГАРАНТИРОВАННО получает +1 тир производства.
+     * Применяется в `applyBattleResult` независимо от рандома сундуков — задаёт детерминированную
+     * кривую отставания «лучшее оружие на поле vs тир производства».
+     */
+    upgradeAtLevels: number[];
   };
   field: {
     steps: FieldSizeStep[];
@@ -107,6 +113,8 @@ export const balance: Balance = {
       11: 290,
       12: 400,
     },
+    // Цех 1→4 к L22; дальше не растёт — гэп с Полем (растёт к 12) расширяется к эндгейму.
+    upgradeAtLevels: [4, 12, 22],
   },
 
   field: {
@@ -147,7 +155,7 @@ export const balance: Balance = {
     scrapMax: 60,
     weaponChance: 0.6,
     weaponTierOffset: 1,
-    blueprintChance: 0.06,
+    blueprintChance: 0, // апгрейды Цеха детерминированы (workshop.upgradeAtLevels). 0 — нет рандома.
   },
 
   economy: {

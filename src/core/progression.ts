@@ -4,6 +4,7 @@ import type { SaveState, BattleResult, FieldState, WeaponTier } from '../types';
 import { maxTier } from './weapons';
 import { addLoot, resizeField } from './merge';
 import { getFieldSize } from './levelGen';
+import { getBalance } from './balanceRuntime';
 
 /** Арсенал каждой линии = оружие соответствующего столбца поля (сверху вниз). */
 export function laneArsenals(field: FieldState): WeaponTier[][] {
@@ -34,8 +35,15 @@ export function applyBattleResult(state: SaveState, result: BattleResult): void 
 
   if (result.passed) {
     state.stats.battlesWon += 1;
+    const passedLevel = state.level;
     state.level += 1;
     state.maxLevelReached = Math.max(state.maxLevelReached, state.level);
+
+    // Детерминированный апгрейд Цеха после ключевых уровней. Независим от RNG/сундуков.
+    const upgrades = getBalance().workshop.upgradeAtLevels;
+    if (Array.isArray(upgrades) && upgrades.includes(passedLevel)) {
+      state.workshopTier = Math.min(maxTier(), state.workshopTier + 1);
+    }
 
     const size = getFieldSize(state.level);
     if (size.cols !== state.field.cols || size.rows !== state.field.rows) {

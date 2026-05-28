@@ -18,15 +18,18 @@ export interface BoardRect {
   h: number;
 }
 
-// Тащить мелко = тап (не драг). В игровых единицах поля.
-const DRAG_THRESHOLD = 12;
+// Смещение указателя (в игровых px) выше которого жест считается перетаскиванием, а не тапом.
+const DRAG_THRESHOLD = 14;
 
 /**
- * Рендер мердж-поля на примитивах. Два способа взаимодействия (мобильно-дружелюбно):
- *  - ТАП по плитке -> выбрать; тап по другой -> мердж (если можно) или перевыбор;
- *    тап по пустой клетке с выбранной плиткой -> перенос.
- *  - DRAG плитки на другую -> мердж / перенос / swap.
- * Хитзоны — на всю клетку (pitch), чтобы попадать легко.
+ * Мердж-поле. Ввод обрабатывается НА УРОВНЕ СЦЕНЫ (scene.input) и попадание в клетку
+ * считается чистой сеточной математикой из pointer.worldX/worldY. Плитки и клетки —
+ * НЕ интерактивные объекты (нет per-object hitArea, нет topOnly, масштаб выделения
+ * не влияет на попадание). Это убирает «через раз»/смещение прошлой реализации.
+ *
+ * Управление:
+ *  - Тап по плитке -> выбрать; тап по другой -> мердж / своп-выбор; тап по пустой -> перенос.
+ *  - Перетаскивание плитки -> мердж / перенос / swap по месту отпускания.
  */
 export class MergeBoard {
   private readonly scene: Phaser.Scene;
@@ -40,32 +43,194 @@ export class MergeBoard {
   private gridTop = 0;
 
   private cellRects: Phaser.GameObjects.Rectangle[] = [];
-  private tiles: Phaser.GameObjects.Container[] = [];
   private tileByIndex = new Map<number, Phaser.GameObjects.Container>();
   private selectedIndex: number | null = null;
+
+  // Состояние текущего жеста.
+  private downIndex: number | null = null;
+  private downX = 0;
+  private downY = 0;
+  private dragging = false;
+  private dragTile: Phaser.GameObjects.Container | null = null;
 
   constructor(scene: Phaser.Scene, field: FieldState, rect: BoardRect, cb: BoardCallbacks) {
     this.scene = scene;
     this.field = field;
     this.rect = rect;
     this.cb = cb;
-    // Мелкое смещение трактуем как тап, а не как начало перетаскивания.
-    scene.input.dragDistanceThreshold = DRAG_THRESHOLD;
     this.computeGeometry();
     this.buildCells();
     this.rebuildTiles();
+    this.attachInput();
   }
 
   /** Перепривязать к (возможно новому) полю и перерисовать — например после роста поля. */
   relayout(field: FieldState): void {
     this.field = field;
     this.clearSelection();
+    this.resetGesture();
     this.computeGeometry();
     this.cellRects.forEach((r) => r.destroy());
     this.cellRects = [];
     this.buildCells();
     this.rebuildTiles();
   }
+
+  // --- Ввод на уровне сцены ---
+
+  private attachInput(): void {
+    this.scene.input.on(Phaser.Input.Events.POINTER_DOWN, this.onPointerDown, this);
+    this.scene.input.on(Phaser.Input.Events.POINTER_MOVE, this.onPointerMove, this);
+    this.scene.input.on(Phaser.Input.Events.POINTER_UP, this.onPointerUp, this);
+    this.scene.input.on(Phaser.Input.Events.POINTER_UP_OUTSIDE, this.onPointerUp, this);
+    this.scene.events.once(Phaser.Scenes.Events.SHUTDOWN, this.detachInput, this);
+    this.scene.events.once(Phaser.Scenes.Events.DESTROY, this.detachInput, this);
+  }
+
+  private detachInput(): void {
+    this.scene.input.off(Phaser.Input.Events.POINTER_DOWN, this.onPointerDown, this);
+    this.scene.input.off(Phaser.Input.Events.POINTER_MOVE, this.onPointerMove, this);
+    this.scene.input.off(Phaser.Input.Events.POINTER_UP, this.onPointerUp, this);
+    this.scene.input.off(Phaser.Input.Events.POINTER_UP_OUTSIDE, this.onPointerUp, this);
+  }
+
+  private resetGesture(): void {
+    this.downIndex = null;
+    this.dragging = false;
+    this.dragTile = null;
+  }
+
+  /** Индекс клетки под указателем по сеточной математике, либо -1 если вне поля. */
+  private pointerCell(pointer: Phaser.Input.Pointer): number {
+    const col = Math.floor((pointer.worldX - this.gridLeft) / this.pitch);
+    const row = Math.floor((pointer.worldY - this.gridTop) / this.pitch);
+    if (col < 0 || col >= this.field.cols || row < 0 || row >= this.field.rows) return -1;
+    return row * this.field.cols + col;
+  }
+
+  private onPointerDown(pointer: Phaser.Input.Pointer): void {
+    const idx = this.pointerCell(pointer);
+    if (idx === -1) return; // клик вне поля — это не наш жест (кнопки/HUD/инвентарь)
+    this.downIndex = idx;
+    this.downX = pointer.worldX;
+    this.downY = pointer.worldY;
+    this.dragging = false;
+    this.dragTile = null;
+  }
+
+  private onPointerMove(pointer: Phaser.Input.Pointer): void {
+    if (this.downIndex === null) return;
+    if (!this.dragging) {
+      const dist = Phaser.Math.Distance.Between(this.downX, this.downY, pointer.worldX, pointer.worldY);
+      if (dist < DRAG_THRESHOLD) return;
+      const tile = this.tileByIndex.get(this.downIndex);
+      if (!tile) {
+        // тащить из пустой клетки нечего
+        this.downIndex = null;
+        return;
+      }
+      this.dragging = true;
+      this.dragTile = tile;
+      this.clearSelection();
+      this.scene.children.bringToTop(tile);
+      tile.setScale(1.06);
+    }
+    if (this.dragTile) this.dragTile.setPosition(pointer.worldX, pointer.worldY);
+  }
+
+  private onPointerUp(pointer: Phaser.Input.Pointer): void {
+    if (this.downIndex === null) return;
+    const from = this.downIndex;
+    const wasDragging = this.dragging;
+    const dragTile = this.dragTile;
+    this.resetGesture();
+
+    if (wasDragging && dragTile) {
+      dragTile.setScale(1);
+      this.resolveDrop(from, this.pointerCell(pointer));
+    } else {
+      this.handleTap(from);
+    }
+  }
+
+  // --- Логика слотов ---
+
+  private handleTap(index: number): void {
+    const targetTier = this.field.cells[index];
+
+    if (this.selectedIndex === null) {
+      if (targetTier != null) this.select(index);
+      return;
+    }
+    if (this.selectedIndex === index) {
+      this.clearSelection();
+      return;
+    }
+
+    const from = this.selectedIndex;
+    if (targetTier == null) {
+      this.clearSelection();
+      this.applyMove(from, index);
+    } else if (canMergeIndices(this.field, from, index)) {
+      this.clearSelection();
+      this.applyMerge(from, index);
+    } else {
+      // занято и не мерджится — просто перевыбираем
+      this.clearSelection();
+      this.select(index);
+    }
+  }
+
+  private resolveDrop(from: number, to: number): void {
+    if (to === -1 || to === from) {
+      this.rebuildTiles(); // вернуть плитку на место
+      return;
+    }
+    if (this.field.cells[to] == null) {
+      this.applyMove(from, to);
+    } else if (canMergeIndices(this.field, from, to)) {
+      this.applyMerge(from, to);
+    } else {
+      this.applyMove(from, to); // обе заняты, не мерджатся => swap
+    }
+  }
+
+  private applyMerge(from: number, to: number): void {
+    const result = mergeInto(this.field, from, to);
+    this.rebuildTiles();
+    this.cb.onChange();
+    if (result != null) this.cb.onMerge?.(result);
+  }
+
+  private applyMove(from: number, to: number): void {
+    moveOrSwap(this.field, from, to);
+    this.rebuildTiles();
+    this.cb.onChange();
+  }
+
+  // --- Выделение (чисто косметика, на попадание не влияет) ---
+
+  private select(index: number): void {
+    this.selectedIndex = index;
+    const tile = this.tileByIndex.get(index);
+    if (!tile) return;
+    tile.setScale(1.08);
+    const bg = tile.getData('bg') as Phaser.GameObjects.Rectangle | undefined;
+    bg?.setStrokeStyle(5, COLORS.accent, 1);
+  }
+
+  private clearSelection(): void {
+    if (this.selectedIndex === null) return;
+    const tile = this.tileByIndex.get(this.selectedIndex);
+    if (tile) {
+      tile.setScale(1);
+      const bg = tile.getData('bg') as Phaser.GameObjects.Rectangle | undefined;
+      bg?.setStrokeStyle(3, 0x000000, 0.3);
+    }
+    this.selectedIndex = null;
+  }
+
+  // --- Геометрия и рендер ---
 
   private computeGeometry(): void {
     const { cols, rows } = this.field;
@@ -88,28 +253,22 @@ export class MergeBoard {
     const total = this.field.cols * this.field.rows;
     for (let i = 0; i < total; i++) {
       const c = this.centerOf(i);
-      // Хитзона клетки — на весь pitch (включая зазоры): по пустой клетке легко попасть.
       const r = this.scene.add
-        .rectangle(c.x, c.y, this.pitch, this.pitch, UI.slot)
+        .rectangle(c.x, c.y, this.cellSize, this.cellSize, UI.slot)
         .setOrigin(0.5);
       r.setStrokeStyle(2, UI.slotStroke);
-      r.setInteractive({ useHandCursor: true });
-      r.on('pointerup', () => this.onCellTap(i));
       this.cellRects.push(r);
     }
   }
 
   rebuildTiles(): void {
     this.clearSelection();
-    this.tiles.forEach((t) => t.destroy());
-    this.tiles = [];
+    this.tileByIndex.forEach((t) => t.destroy());
     this.tileByIndex.clear();
     for (let i = 0; i < this.field.cells.length; i++) {
       const tier = this.field.cells[i];
       if (tier == null) continue;
-      const tile = this.makeTile(i, tier);
-      this.tiles.push(tile);
-      this.tileByIndex.set(i, tile);
+      this.tileByIndex.set(i, this.makeTile(i, tier));
     }
   }
 
@@ -138,120 +297,7 @@ export class MergeBoard {
     nameTxt.setStroke('#000000', 3);
 
     const tile = this.scene.add.container(c.x, c.y, [bg, tierTxt, nameTxt]);
-    // Хитзона на весь pitch (а не только на видимую плитку) — попадать легче, нет «мёртвых» зазоров.
-    tile.setSize(this.pitch, this.pitch);
-    tile.setData('index', index);
     tile.setData('bg', bg);
-    tile.setData('dragged', false);
-    tile.setInteractive(
-      new Phaser.Geom.Rectangle(-this.pitch / 2, -this.pitch / 2, this.pitch, this.pitch),
-      Phaser.Geom.Rectangle.Contains,
-    );
-    this.scene.input.setDraggable(tile);
-
-    tile.on('pointerdown', () => tile.setData('dragged', false));
-    tile.on('dragstart', () => {
-      tile.setData('dragged', true);
-      this.scene.children.bringToTop(tile);
-      tile.setScale(1.06);
-    });
-    tile.on('drag', (_p: Phaser.Input.Pointer, dragX: number, dragY: number) => {
-      tile.setPosition(dragX, dragY);
-    });
-    tile.on('dragend', () => {
-      tile.setScale(1);
-      this.handleDrop(index, tile.x, tile.y);
-    });
-    // Тап (без перетаскивания) — выбор/мердж.
-    tile.on('pointerup', () => {
-      if (!tile.getData('dragged')) this.onTileTap(index);
-    });
-
     return tile;
-  }
-
-  // --- Тап-логика ---
-
-  private onTileTap(index: number): void {
-    if (this.selectedIndex === null) {
-      this.select(index);
-      return;
-    }
-    if (this.selectedIndex === index) {
-      this.clearSelection();
-      return;
-    }
-    const from = this.selectedIndex;
-    if (canMergeIndices(this.field, from, index)) {
-      this.clearSelection();
-      const result = mergeInto(this.field, from, index);
-      this.rebuildTiles();
-      this.cb.onChange();
-      if (result != null) this.cb.onMerge?.(result);
-    } else {
-      // Не мерджится — просто переносим выбор на новую плитку.
-      this.clearSelection();
-      this.select(index);
-    }
-  }
-
-  private onCellTap(index: number): void {
-    // По пустой клетке (плитки на ней нет, иначе событие забрала бы плитка): перенос выбранной.
-    if (this.selectedIndex === null) return;
-    if (this.field.cells[index] != null) return;
-    const from = this.selectedIndex;
-    this.clearSelection();
-    moveOrSwap(this.field, from, index); // to пусто => перенос
-    this.rebuildTiles();
-    this.cb.onChange();
-  }
-
-  private select(index: number): void {
-    this.selectedIndex = index;
-    const tile = this.tileByIndex.get(index);
-    if (!tile) return;
-    tile.setScale(1.08);
-    const bg = tile.getData('bg') as Phaser.GameObjects.Rectangle | undefined;
-    bg?.setStrokeStyle(5, COLORS.accent, 1);
-  }
-
-  private clearSelection(): void {
-    if (this.selectedIndex === null) return;
-    const tile = this.tileByIndex.get(this.selectedIndex);
-    if (tile) {
-      tile.setScale(1);
-      const bg = tile.getData('bg') as Phaser.GameObjects.Rectangle | undefined;
-      bg?.setStrokeStyle(3, 0x000000, 0.3);
-    }
-    this.selectedIndex = null;
-  }
-
-  // --- Drag-логика ---
-
-  private hitIndex(x: number, y: number): number {
-    const { cols, rows } = this.field;
-    const col = Math.floor((x - this.gridLeft) / this.pitch);
-    const row = Math.floor((y - this.gridTop) / this.pitch);
-    if (col < 0 || col >= cols || row < 0 || row >= rows) return -1;
-    return row * cols + col;
-  }
-
-  private handleDrop(from: number, x: number, y: number): void {
-    this.clearSelection();
-    const to = this.hitIndex(x, y);
-    if (to === -1 || to === from) {
-      this.rebuildTiles(); // вернуть на место
-      return;
-    }
-    if (canMergeIndices(this.field, from, to)) {
-      const result = mergeInto(this.field, from, to);
-      this.rebuildTiles();
-      this.cb.onChange();
-      if (result != null) this.cb.onMerge?.(result);
-    } else {
-      moveOrSwap(this.field, from, to);
-      this.rebuildTiles();
-      this.cb.onChange();
-    }
   }
 }

@@ -449,6 +449,16 @@ export class BattleScene extends Phaser.Scene {
     return Math.max(this.MIN_WALK, distance * this.PIXEL_TIME);
   }
 
+  /** «Полшажка назад» после рывка с раненой/уцелевшей целью — короткий визуальный
+   *  откат прямо у препятствия (НЕ полный возврат к воротам).
+   *  Полный отскок к базе остаётся только для stuck (оружие кончилось → разворот домой)
+   *  и для chest (взял сундук → пошёл домой). */
+  private backstepDistance(li: number): number {
+    const count = this.level.lanes[li].obstacles.length;
+    const spacing = (this.yBottom - this.yChest) / (count + 1);
+    return Math.min(spacing * 0.5, 60); // полспейсинга, но не больше 60px
+  }
+
   private returnFighter(li: number, cb: () => void): void {
     if (this.resultShown) {
       cb();
@@ -495,10 +505,15 @@ export class BattleScene extends Phaser.Scene {
           this.updateFighterWeapon(li, ev.weaponTierAfter, ev.weaponHitsAfter);
         }
         if (ev.retreat) {
+          // Короткий откат «полшажка назад» — только обозначить, что упёрся.
+          // Полное возвращение домой делает только stuck/chest (см. returnFighter).
+          const back = this.backstepDistance(li);
+          const backY = Math.min(this.yBottom, fighter.y + back);
+          const dist = Math.abs(backY - fighter.y);
           this.tweens.add({
             targets: fighter,
-            y: this.yBottom,
-            duration: this.MOVE,
+            y: backY,
+            duration: Math.max(130, dist * this.PIXEL_TIME),
             onComplete: onDone,
           });
         } else {

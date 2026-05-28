@@ -112,12 +112,12 @@ export const balance: Balance = {
   field: {
     steps: [
       { fromLevel: 1, cols: 2, rows: 2 },
-      { fromLevel: 3, cols: 2, rows: 3 },
-      { fromLevel: 6, cols: 3, rows: 3 },
-      { fromLevel: 10, cols: 3, rows: 4 },
-      { fromLevel: 16, cols: 4, rows: 4 },
-      { fromLevel: 24, cols: 4, rows: 5 },
-      { fromLevel: 34, cols: 5, rows: 5 },
+      { fromLevel: 4, cols: 2, rows: 3 },
+      { fromLevel: 8, cols: 3, rows: 3 },
+      { fromLevel: 14, cols: 3, rows: 4 },
+      { fromLevel: 20, cols: 4, rows: 4 },
+      { fromLevel: 28, cols: 4, rows: 5 },
+      { fromLevel: 40, cols: 5, rows: 5 },
     ],
   },
 
@@ -130,8 +130,8 @@ export const balance: Balance = {
   levelGen: {
     baseRoadLength: 8,
     roadLengthPerLevel: 0.6,
-    baseZombieCount: 4,
-    zombieCountPerLevel: 0.7,
+    baseZombieCount: 3,
+    zombieCountPerLevel: 0.75,
     mediumFromLevel: 6,
     strongFromLevel: 16,
     crateChance: 0.18,
@@ -146,8 +146,8 @@ export const balance: Balance = {
     scrapMin: 20,
     scrapMax: 60,
     weaponChance: 0.6,
-    weaponTierOffset: 0,
-    blueprintChance: 0.25,
+    weaponTierOffset: 1,
+    blueprintChance: 0.06,
   },
 
   economy: {

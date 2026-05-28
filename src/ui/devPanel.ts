@@ -13,6 +13,7 @@ import {
   resetBalanceOverride,
   hasBalanceOverride,
 } from '../core/balanceRuntime';
+import { runAutotest, type AutotestReport } from '../core/autotest';
 
 const css = (el: HTMLElement, style: string): void => {
   el.style.cssText = style;
@@ -53,6 +54,98 @@ function field(labelText: string, id: string, value: string): HTMLDivElement {
   css(inp, 'width:90px;background:#15171c;color:#fff;border:1px solid #3a414d;border-radius:4px;padding:4px;font:12px monospace;');
   wrap.append(lab, inp);
   return wrap;
+}
+
+type ChartSeries = { label: string; color: string; values: Array<number | null> };
+
+/** Простой линейный график на canvas. yMaxOpt — если задан, фиксированная шкала. */
+function drawChart(
+  canvas: HTMLCanvasElement,
+  title: string,
+  series: ChartSeries[],
+  xMax: number,
+  yMaxOpt?: number,
+): void {
+  const W = canvas.width;
+  const H = canvas.height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0a0b0e';
+  ctx.fillRect(0, 0, W, H);
+  const PL = 32;
+  const PR = 8;
+  const PT = 22;
+  const PB = 22;
+  const cw = W - PL - PR;
+  const ch = H - PT - PB;
+
+  let yMax = yMaxOpt;
+  if (yMax == null) {
+    let m = 0;
+    for (const s of series) for (const v of s.values) if (v != null && v > m) m = v;
+    yMax = Math.max(1, m);
+  }
+
+  ctx.strokeStyle = '#1f232a';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = PT + (ch * i) / 4;
+    ctx.beginPath();
+    ctx.moveTo(PL, y);
+    ctx.lineTo(PL + cw, y);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = '#5a6068';
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  for (let i = 0; i <= 4; i++) {
+    const v = yMax * (1 - i / 4);
+    ctx.fillText(v >= 10 ? v.toFixed(0) : v.toFixed(1), PL - 3, PT + (ch * i) / 4);
+  }
+
+  const n = series[0]?.values.length ?? 0;
+  const step = xMax <= 10 ? 2 : xMax <= 25 ? 5 : 10;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  for (let x = step; x <= xMax; x += step) {
+    const idx = x - 1;
+    if (idx < 0 || idx >= n) continue;
+    const px = PL + (cw * idx) / Math.max(1, n - 1);
+    ctx.fillText(String(x), px, PT + ch + 3);
+  }
+
+  ctx.fillStyle = '#cfe';
+  ctx.font = 'bold 11px monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(title, PL, 4);
+
+  for (const s of series) {
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    let prev = false;
+    const denom = Math.max(1, s.values.length - 1);
+    for (let i = 0; i < s.values.length; i++) {
+      const v = s.values[i];
+      if (v == null) {
+        prev = false;
+        continue;
+      }
+      const px = PL + (cw * i) / denom;
+      const py = PT + ch * (1 - v / yMax);
+      if (!prev) {
+        ctx.moveTo(px, py);
+        prev = true;
+      } else {
+        ctx.lineTo(px, py);
+      }
+    }
+    ctx.stroke();
+  }
 }
 
 export function initDevPanel(game: Phaser.Game): void {
@@ -209,6 +302,119 @@ export function initDevPanel(game: Phaser.Game): void {
     refreshGame(game);
   };
   balTab.append(status, ta, refreshBtn, copyBtn, applyBtn, resetBalBtn);
+
+  // --- Вкладка «Автотест» ---
+  const autoTab = makeTab('auto', 'Автотест');
+  const autoStatus = document.createElement('div');
+  css(autoStatus, 'margin:4px 0;color:#9aa0a6;');
+  autoStatus.textContent = 'Не запускался';
+  const autoSummary = document.createElement('pre');
+  css(
+    autoSummary,
+    'background:#15171c;color:#cfe;border:1px solid #3a414d;border-radius:4px;padding:6px;font:11px monospace;white-space:pre-wrap;display:none;margin:4px 0;',
+  );
+  const chartTitles = [
+    'Макс тир по столбцам (Бойцам)',
+    'Лом получен за уровень',
+    'Произведено оружия за уровень',
+    'Размер поля (cols × rows)',
+  ];
+  const chartCanvases: HTMLCanvasElement[] = [];
+  for (let i = 0; i < 4; i++) {
+    const c = document.createElement('canvas');
+    c.width = 268;
+    c.height = 140;
+    css(
+      c,
+      'width:100%;height:140px;background:#0a0b0e;border:1px solid #3a414d;border-radius:4px;margin:4px 0;',
+    );
+    chartCanvases.push(c);
+  }
+  let lastReport: AutotestReport | null = null;
+  const colColors = ['#9fe870', '#ff6a00', '#3a7bd5', '#d53a9b', '#00e5ff'];
+
+  const renderReport = (rep: AutotestReport): void => {
+    autoStatus.textContent = rep.finished
+      ? `Пройдено ${rep.reachedLevel}/${rep.totalLevels} ✓`
+      : `Застрял на уровне ${rep.stuckAt} (прошёл ${rep.reachedLevel}/${rep.totalLevels})`;
+    const last = rep.samples[rep.samples.length - 1];
+    autoSummary.style.display = 'block';
+    autoSummary.textContent = [
+      `Уровней: ${rep.reachedLevel}/${rep.totalLevels}`,
+      `Произведено оружий: ${rep.totalProduced}`,
+      `Чертежей: ${rep.totalBlueprints}`,
+      last
+        ? `Финал: поле ${last.cols}×${last.rows}, Цех T${last.workshopTier}, макс на поле T${last.fieldMaxTier}`
+        : '',
+      `Макс попыток за уровень: ${Math.max(...rep.samples.map((s) => s.attempts), 1)}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    if (rep.samples.length === 0) return;
+    const xMax = Math.max(...rep.samples.map((s) => s.level), 1);
+    const maxCols = Math.max(...rep.samples.map((s) => s.cols), 1);
+    const series1: ChartSeries[] = [];
+    for (let c = 0; c < maxCols; c++) {
+      series1.push({
+        label: `Б${c + 1}`,
+        color: colColors[c] ?? '#fff',
+        values: rep.samples.map((s) => (c < s.cols ? s.maxTierByColumn[c] : null)),
+      });
+    }
+    drawChart(chartCanvases[0], chartTitles[0], series1, xMax, maxTier());
+    drawChart(
+      chartCanvases[1],
+      chartTitles[1],
+      [{ label: 'scrap', color: '#9fe870', values: rep.samples.map((s) => s.scrapGained) }],
+      xMax,
+    );
+    drawChart(
+      chartCanvases[2],
+      chartTitles[2],
+      [{ label: 'produced', color: '#3a7bd5', values: rep.samples.map((s) => s.weaponsProduced) }],
+      xMax,
+    );
+    drawChart(
+      chartCanvases[3],
+      chartTitles[3],
+      [{ label: 'size', color: '#d4af37', values: rep.samples.map((s) => s.cols * s.rows) }],
+      xMax,
+      25,
+    );
+  };
+
+  const runAutoBtn = btn('Запустить (50 ур.)', 'zm-auto-run');
+  runAutoBtn.onclick = () => {
+    runAutoBtn.disabled = true;
+    const prevText = runAutoBtn.textContent;
+    runAutoBtn.textContent = '…';
+    // даём UI обновиться перед синхронным прогоном
+    setTimeout(() => {
+      try {
+        lastReport = runAutotest(50);
+        renderReport(lastReport);
+      } catch (e) {
+        autoStatus.textContent = 'Ошибка: ' + (e as Error).message;
+      } finally {
+        runAutoBtn.textContent = prevText ?? 'Запустить (50 ур.)';
+        runAutoBtn.disabled = false;
+      }
+    }, 10);
+  };
+  const copyAutoBtn = btn('Скопировать JSON', 'zm-auto-copy');
+  copyAutoBtn.onclick = () => {
+    if (!lastReport) return;
+    const json = JSON.stringify(lastReport, null, 2);
+    try {
+      navigator.clipboard?.writeText(json);
+    } catch {
+      /* */
+    }
+    copyAutoBtn.textContent = 'Скопировано!';
+    setTimeout(() => (copyAutoBtn.textContent = 'Скопировать JSON'), 1200);
+  };
+  autoTab.append(runAutoBtn, copyAutoBtn, autoStatus, autoSummary, ...chartCanvases);
 
   // показать первую вкладку
   tabs.res.style.display = 'block';

@@ -38,33 +38,76 @@ function simulateLane(lane: Lane, tiers: number[], ctx: BattleCtx): LaneResult {
   let collectedScrap = 0;
   const collectedWeapons: WeaponTier[] = [];
   let blueprint = false;
+  // «Пробивающий» урон: если предыдущий удар нанёс больше HP врага, остаток
+  // переносится на следующее боевое препятствие на этой же линии.
+  let carry = 0;
+
+  const snap = (): { tier?: number; hits?: number } => {
+    const w = strongestAvailable(ars);
+    return w ? { tier: w.tier, hits: w.hits } : {};
+  };
 
   for (let i = 0; i < lane.obstacles.length; i++) {
     const ob = lane.obstacles[i];
 
     if (ob.kind === 'scrap') {
       collectedScrap += ob.scrap;
-      steps.push({ index: i, kind: 'scrap', outcome: 'picked', hitsSpent: 0, scrap: ob.scrap });
+      const s = snap();
+      steps.push({
+        index: i,
+        kind: 'scrap',
+        outcome: 'picked',
+        hitsSpent: 0,
+        scrap: ob.scrap,
+        weaponTierAfter: s.tier,
+        weaponHitsAfter: s.hits,
+      });
       continue;
     }
 
-    // Бой с зомби/ящиком: бьём, пока hp>0 или не кончились все оружия.
+    // Бой с зомби/ящиком.
+    const hpStart = ob.hp;
     let hp = ob.hp;
     let hitsSpent = 0;
     let depleted = false;
+
+    // 1) Применяем накопленный пробивающий урон.
+    if (carry > 0) {
+      const absorbed = Math.min(carry, hp);
+      hp -= absorbed;
+      carry -= absorbed;
+    }
+
+    // 2) Бьём, пока враг жив или не кончатся оружия.
     while (hp > 0) {
       const w = strongestAvailable(ars);
       if (!w) {
         depleted = true;
         break;
       }
-      hp -= getWeapon(w.tier).damagePerHit;
+      const dmg = getWeapon(w.tier).damagePerHit;
+      if (dmg >= hp) {
+        carry = dmg - hp; // избыток уходит дальше
+        hp = 0;
+      } else {
+        hp -= dmg;
+      }
       w.hits -= 1;
       hitsSpent += 1;
     }
 
     if (depleted) {
-      steps.push({ index: i, kind: ob.kind, outcome: 'stuck', hitsSpent, scrap: 0 });
+      const s = snap();
+      steps.push({
+        index: i,
+        kind: ob.kind,
+        outcome: 'stuck',
+        hitsSpent,
+        scrap: 0,
+        weaponTierAfter: s.tier,
+        weaponHitsAfter: s.hits,
+        hpStart,
+      });
       return { reachedChest: false, steps, collectedScrap, collectedWeapons, blueprint };
     }
 
@@ -76,10 +119,10 @@ function simulateLane(lane: Lane, tiers: number[], ctx: BattleCtx): LaneResult {
       if (ob.weapon) {
         gainedTier = clampTier(ctx.workshopTier - 1);
         collectedWeapons.push(gainedTier);
-        // Подобранное оружие можно пускать в ход на этой же линии.
         ars.push({ tier: gainedTier, hits: getWeapon(gainedTier).hits });
       }
     }
+    const s = snap();
     steps.push({
       index: i,
       kind: ob.kind,
@@ -87,6 +130,9 @@ function simulateLane(lane: Lane, tiers: number[], ctx: BattleCtx): LaneResult {
       hitsSpent,
       scrap: gainedScrap,
       weaponTier: gainedTier,
+      weaponTierAfter: s.tier,
+      weaponHitsAfter: s.hits,
+      hpStart,
     });
   }
 
@@ -99,6 +145,7 @@ function simulateLane(lane: Lane, tiers: number[], ctx: BattleCtx): LaneResult {
     collectedWeapons.push(chestTier);
   }
   if (chest.blueprint) blueprint = true;
+  const s = snap();
   steps.push({
     index: -1,
     kind: 'chest',
@@ -107,6 +154,8 @@ function simulateLane(lane: Lane, tiers: number[], ctx: BattleCtx): LaneResult {
     scrap: chest.scrap,
     weaponTier: chestTier,
     blueprint: chest.blueprint,
+    weaponTierAfter: s.tier,
+    weaponHitsAfter: s.hits,
   });
   return { reachedChest: true, steps, collectedScrap, collectedWeapons, blueprint };
 }

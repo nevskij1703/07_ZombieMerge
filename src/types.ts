@@ -74,10 +74,15 @@ export interface LaneStep {
   index: number; // индекс препятствия, либо -1 для сундука
   kind: ObstacleKind | 'chest';
   outcome: 'cleared' | 'picked' | 'opened' | 'stuck';
-  hitsSpent: number; // для тайминга анимации
+  hitsSpent: number; // для тайминга анимации; 0 если врага добил «пробивающий» урон
   scrap: number;
   weaponTier?: number;
   blueprint?: boolean;
+  /** Текущее активное оружие у бойца ПОСЛЕ этого шага (если есть). Для UI. */
+  weaponTierAfter?: number;
+  weaponHitsAfter?: number;
+  /** HP врага ДО атаки — для корректной анимации полоски HP с учётом carry. */
+  hpStart?: number;
 }
 
 export interface LaneResult {

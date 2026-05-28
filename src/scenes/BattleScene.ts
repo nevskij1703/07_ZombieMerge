@@ -5,6 +5,7 @@ import type { Level, BattleResult, LaneStep } from '../types';
 import { getState, save } from '../core/storage';
 import { simulateBattle } from '../core/battleSim';
 import { applyBattleResult } from '../core/progression';
+import { getWeapon } from '../core/weapons';
 import { Button } from '../ui/button';
 
 interface BattleData {
@@ -33,8 +34,14 @@ export class BattleScene extends Phaser.Scene {
   private readonly CHEST = 420;
 
   private fighters: Phaser.GameObjects.Container[] = [];
+  private fighterTierTexts: Phaser.GameObjects.Text[] = [];
+  private fighterHitsTexts: Phaser.GameObjects.Text[] = [];
+  private fighterRings: Phaser.GameObjects.Arc[] = [];
   private chestTokens: Phaser.GameObjects.Rectangle[] = [];
-  private obTokens: Phaser.GameObjects.GameObject[][] = [];
+  private obTokens: (Phaser.GameObjects.GameObject | null)[][] = [];
+  private obBars: (Phaser.GameObjects.Rectangle | null)[][] = [];
+  private obBarBgs: (Phaser.GameObjects.Rectangle | null)[][] = [];
+  private obHpTexts: (Phaser.GameObjects.Text | null)[][] = [];
   private lanesDone = 0;
   private resultShown = false;
   private speed = 1;
@@ -50,8 +57,14 @@ export class BattleScene extends Phaser.Scene {
     this.resultShown = false;
     this.speed = 1;
     this.fighters = [];
+    this.fighterTierTexts = [];
+    this.fighterHitsTexts = [];
+    this.fighterRings = [];
     this.chestTokens = [];
     this.obTokens = [];
+    this.obBars = [];
+    this.obBarBgs = [];
+    this.obHpTexts = [];
 
     const cols = this.level.cols;
     this.laneWidth = DESIGN_WIDTH / cols;
@@ -90,32 +103,62 @@ export class BattleScene extends Phaser.Scene {
 
     // препятствия
     const obstacles = this.level.lanes[li].obstacles;
-    const tokens: Phaser.GameObjects.GameObject[] = [];
+    const tokens: (Phaser.GameObjects.GameObject | null)[] = new Array(obstacles.length).fill(null);
+    const bars: (Phaser.GameObjects.Rectangle | null)[] = new Array(obstacles.length).fill(null);
+    const barBgs: (Phaser.GameObjects.Rectangle | null)[] = new Array(obstacles.length).fill(null);
+    const hpTexts: (Phaser.GameObjects.Text | null)[] = new Array(obstacles.length).fill(null);
     const tokenSize = Math.min(this.laneWidth * 0.42, 42);
+    const barW = Math.min(tokenSize * 1.4, 56);
+    const barH = 4;
     for (let i = 0; i < obstacles.length; i++) {
       const ob = obstacles[i];
       const y = this.obstacleY(li, i);
-      let t: Phaser.GameObjects.GameObject;
       if (ob.kind === 'zombie') {
-        t = this.add.circle(x, y, tokenSize / 2, ZKIND_COLOR[ob.zombieKind ?? 'weak']).setStrokeStyle(2, 0x000000, 0.4);
+        tokens[i] = this.add.circle(x, y, tokenSize / 2, ZKIND_COLOR[ob.zombieKind ?? 'weak']).setStrokeStyle(2, 0x000000, 0.4);
       } else if (ob.kind === 'crate') {
-        t = this.add.rectangle(x, y, tokenSize, tokenSize, 0x8b5a2b).setStrokeStyle(2, 0x000000, 0.4);
+        tokens[i] = this.add.rectangle(x, y, tokenSize, tokenSize, 0x8b5a2b).setStrokeStyle(2, 0x000000, 0.4);
       } else {
-        t = this.add.circle(x, y, tokenSize / 4, 0x9aa0a6);
+        tokens[i] = this.add.circle(x, y, tokenSize / 4, 0x9aa0a6);
       }
-      tokens.push(t);
+      // HP-bar только для боевых препятствий.
+      if (ob.kind === 'zombie' || ob.kind === 'crate') {
+        const barY = y - tokenSize / 2 - 9;
+        const barX = x - barW / 2;
+        barBgs[i] = this.add.rectangle(barX, barY, barW, barH, 0x333333).setOrigin(0, 0.5);
+        const bar = this.add.rectangle(barX, barY, barW, barH, 0xee3333).setOrigin(0, 0.5);
+        bar.setData('maxHp', ob.hp);
+        bars[i] = bar;
+        hpTexts[i] = this.add
+          .text(x, barY - 4, String(ob.hp), { fontFamily: 'monospace', fontSize: '10px', color: '#ffcccc' })
+          .setOrigin(0.5, 1);
+      }
     }
     this.obTokens[li] = tokens;
+    this.obBars[li] = bars;
+    this.obBarBgs[li] = barBgs;
+    this.obHpTexts[li] = hpTexts;
 
     // боец снизу
     const bestTier = arsenal.length ? Math.max(...arsenal) : 0;
-    const color = bestTier ? TIER_COLORS[bestTier] ?? 0x66ccff : 0x55606e;
-    const circle = this.add.circle(0, 0, tokenSize * 0.6, 0x66ccff).setStrokeStyle(3, color, 1);
-    const label = this.add
-      .text(0, 0, bestTier ? String(bestTier) : '—', { fontFamily: 'monospace', fontSize: '20px', color: '#06121f' })
+    const startHits = bestTier ? getWeapon(bestTier).hits : 0;
+    const ringColor = bestTier ? TIER_COLORS[bestTier] ?? 0x66ccff : 0x55606e;
+    const circle = this.add.circle(0, 0, tokenSize * 0.6, 0x66ccff).setStrokeStyle(3, ringColor, 1);
+    const tierLabel = this.add
+      .text(0, -2, bestTier ? String(bestTier) : '—', { fontFamily: 'monospace', fontSize: '20px', color: '#06121f' })
       .setOrigin(0.5);
-    const fighter = this.add.container(x, this.yBottom, [circle, label]);
+    const hitsLabel = this.add
+      .text(0, tokenSize * 0.7 + 4, bestTier ? String(startHits) : '', {
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        color: '#ffffff',
+      })
+      .setOrigin(0.5);
+    hitsLabel.setStroke('#000000', 3);
+    const fighter = this.add.container(x, this.yBottom, [circle, tierLabel, hitsLabel]);
     this.fighters[li] = fighter;
+    this.fighterTierTexts[li] = tierLabel;
+    this.fighterHitsTexts[li] = hitsLabel;
+    this.fighterRings[li] = circle;
   }
 
   private obstacleY(li: number, idx: number): number {
@@ -154,18 +197,33 @@ export class BattleScene extends Phaser.Scene {
           if (this.resultShown) return;
           if (step.kind === 'scrap') {
             this.popText(fighter.x, ty, `+${step.scrap}`, '#9fe870');
-            this.time.delayedCall(this.SCRAP, doStep);
+            this.time.delayedCall(this.SCRAP, () => {
+              this.updateFighterWeapon(li, step.weaponTierAfter, step.weaponHitsAfter);
+              doStep();
+            });
           } else if (step.outcome === 'opened') {
             this.openChest(li);
             this.popText(fighter.x, this.yChest, 'СУНДУК', '#ffd700');
-            this.time.delayedCall(this.CHEST, () => this.returnFighter(li, finishLane));
+            this.time.delayedCall(this.CHEST, () => {
+              this.updateFighterWeapon(li, step.weaponTierAfter, step.weaponHitsAfter);
+              this.returnFighter(li, finishLane);
+            });
           } else if (step.outcome === 'cleared') {
-            this.clearObstacle(li, step.index, fighter);
-            this.time.delayedCall(this.fightTime(step.hitsSpent), doStep);
+            const ft = this.fightTime(step.hitsSpent);
+            this.fightObstacle(li, step.index, fighter, ft, step.hitsSpent);
+            this.time.delayedCall(ft, () => {
+              this.updateFighterWeapon(li, step.weaponTierAfter, step.weaponHitsAfter);
+              doStep();
+            });
           } else {
             // stuck — отступление
+            const ft = this.fightTime(step.hitsSpent);
+            this.fightObstacle(li, step.index, fighter, ft, step.hitsSpent);
             this.popText(fighter.x, ty, 'отступ', '#ff8a8a');
-            this.time.delayedCall(this.fightTime(step.hitsSpent), () => this.returnFighter(li, finishLane));
+            this.time.delayedCall(ft, () => {
+              this.updateFighterWeapon(li, step.weaponTierAfter, step.weaponHitsAfter);
+              this.returnFighter(li, finishLane);
+            });
           }
         },
       });
@@ -187,12 +245,78 @@ export class BattleScene extends Phaser.Scene {
     });
   }
 
-  private clearObstacle(li: number, idx: number, fighter: Phaser.GameObjects.Container): void {
+  /** Анимируем бой по препятствию: HP-бар → 0 за ft мс, фейд токена, шейк бойца. */
+  private fightObstacle(
+    li: number,
+    idx: number,
+    fighter: Phaser.GameObjects.Container,
+    ft: number,
+    hitsSpent: number,
+  ): void {
     const token = this.obTokens[li]?.[idx];
-    if (token) {
-      this.tweens.add({ targets: token, alpha: 0, scale: 0.2, duration: 180, onComplete: () => token.destroy() });
+    const bar = this.obBars[li]?.[idx];
+    const barBg = this.obBarBgs[li]?.[idx];
+    const hpText = this.obHpTexts[li]?.[idx];
+
+    if (bar) {
+      if (hitsSpent > 0 && ft > 60) {
+        const maxHp = (bar.getData('maxHp') as number) ?? 1;
+        this.tweens.add({ targets: bar, scaleX: 0, duration: ft });
+        const proxy = { v: maxHp };
+        this.tweens.add({
+          targets: proxy,
+          v: 0,
+          duration: ft,
+          onUpdate: () => hpText?.setText(String(Math.max(0, Math.ceil(proxy.v)))),
+          onComplete: () => hpText?.setText('0'),
+        });
+      } else {
+        // пробивающий урон или мгновенное уничтожение
+        bar.setScale(0, 1);
+        hpText?.setText('0');
+      }
     }
-    this.tweens.add({ targets: fighter, scaleX: 1.15, yoyo: true, duration: 70, repeat: 1 });
+
+    if (token) {
+      this.tweens.add({
+        targets: token,
+        alpha: 0,
+        scale: 0.2,
+        duration: 180,
+        delay: Math.max(0, ft - 100),
+        onComplete: () => {
+          token.destroy();
+          bar?.destroy();
+          barBg?.destroy();
+          hpText?.destroy();
+          if (this.obTokens[li]) this.obTokens[li][idx] = null;
+          if (this.obBars[li]) this.obBars[li][idx] = null;
+          if (this.obBarBgs[li]) this.obBarBgs[li][idx] = null;
+          if (this.obHpTexts[li]) this.obHpTexts[li][idx] = null;
+        },
+      });
+    }
+
+    if (hitsSpent > 0) {
+      this.tweens.add({ targets: fighter, scaleX: 1.15, yoyo: true, duration: 70, repeat: 1 });
+    }
+  }
+
+  /** Обновить тир и оставшийся ресурс активного оружия бойца. */
+  private updateFighterWeapon(li: number, tier?: number, hits?: number): void {
+    const tierText = this.fighterTierTexts[li];
+    const hitsText = this.fighterHitsTexts[li];
+    const ring = this.fighterRings[li];
+    if (!tierText || !hitsText) return;
+    if (tier == null || hits == null || hits <= 0) {
+      tierText.setText('—');
+      hitsText.setText('');
+      ring?.setStrokeStyle(3, 0x55606e, 1);
+      return;
+    }
+    tierText.setText(String(tier));
+    hitsText.setText(String(hits));
+    ring?.setStrokeStyle(3, TIER_COLORS[tier] ?? 0x66ccff, 1);
   }
 
   private openChest(li: number): void {

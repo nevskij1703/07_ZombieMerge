@@ -237,15 +237,15 @@ export class BattleScene extends Phaser.Scene {
             });
           } else if (step.outcome === 'cleared') {
             const ft = this.fightTime(step.hitsSpent);
-            this.fightObstacle(li, step.index, fighter, ft, step.hitsSpent);
+            this.fightObstacle(li, step, fighter, ft);
             this.time.delayedCall(ft, () => {
               this.updateFighterWeapon(li, step.weaponTierAfter, step.weaponHitsAfter);
               doStep();
             });
           } else {
-            // stuck — отступление
+            // stuck — препятствие остаётся живым, боец отступает
             const ft = this.fightTime(step.hitsSpent);
-            this.fightObstacle(li, step.index, fighter, ft, step.hitsSpent);
+            this.fightObstacle(li, step, fighter, ft);
             this.popText(fighter.x, ty, 'отступ', '#ff8a8a');
             this.time.delayedCall(ft, () => {
               this.updateFighterWeapon(li, step.weaponTierAfter, step.weaponHitsAfter);
@@ -272,39 +272,51 @@ export class BattleScene extends Phaser.Scene {
     });
   }
 
-  /** Анимируем бой по препятствию: HP-бар → 0 за ft мс, фейд токена, шейк бойца. */
+  /**
+   * Анимируем бой по препятствию. HP-бар обновляется ДИСКРЕТНО на каждый удар (мгновенный
+   * снеп — без плавного твина). Если препятствие убито (hpAfter=0) — фейд токена;
+   * если боец застрял (hpAfter>0) — токен остаётся с уменьшенным HP.
+   */
   private fightObstacle(
     li: number,
-    idx: number,
+    step: LaneStep,
     fighter: Phaser.GameObjects.Container,
     ft: number,
-    hitsSpent: number,
   ): void {
+    const idx = step.index;
     const token = this.obTokens[li]?.[idx];
     const bar = this.obBars[li]?.[idx];
     const barBg = this.obBarBgs[li]?.[idx];
     const hpText = this.obHpTexts[li]?.[idx];
+    const maxHp = (bar?.getData('maxHp') as number) ?? 1;
+    const startHp = step.hpStart ?? maxHp;
+    const endHp = step.hpAfter ?? 0;
+    const kills = endHp <= 0;
+    const hits = step.hitsSpent;
 
     if (bar) {
-      if (hitsSpent > 0 && ft > 60) {
-        const maxHp = (bar.getData('maxHp') as number) ?? 1;
-        this.tweens.add({ targets: bar, scaleX: 0, duration: ft });
-        const proxy = { v: maxHp };
-        this.tweens.add({
-          targets: proxy,
-          v: 0,
-          duration: ft,
-          onUpdate: () => hpText?.setText(String(Math.max(0, Math.ceil(proxy.v)))),
-          onComplete: () => hpText?.setText('0'),
-        });
+      if (hits > 0 && ft > 0) {
+        // Дискретные снепы: каждый удар мгновенно обновляет HP-бар и число.
+        const interval = ft / hits;
+        const drop = (startHp - endHp) / hits;
+        for (let h = 1; h <= hits; h++) {
+          const newHp = Math.max(endHp, Math.round(startHp - drop * h));
+          this.time.delayedCall(interval * h, () => {
+            if (this.resultShown) return;
+            bar.setScale(newHp / maxHp, 1);
+            hpText?.setText(String(newHp));
+            this.tweens.add({ targets: fighter, scaleX: 1.1, yoyo: true, duration: 60 });
+          });
+        }
       } else {
-        // пробивающий урон или мгновенное уничтожение
-        bar.setScale(0, 1);
-        hpText?.setText('0');
+        // Пробивающий урон / мгновенное уничтожение — снеп сразу.
+        bar.setScale(endHp / maxHp, 1);
+        hpText?.setText(String(endHp));
       }
     }
 
-    if (token) {
+    // Токен исчезает только если враг убит.
+    if (kills && token) {
       this.tweens.add({
         targets: token,
         alpha: 0,
@@ -322,10 +334,6 @@ export class BattleScene extends Phaser.Scene {
           if (this.obHpTexts[li]) this.obHpTexts[li][idx] = null;
         },
       });
-    }
-
-    if (hitsSpent > 0) {
-      this.tweens.add({ targets: fighter, scaleX: 1.15, yoyo: true, duration: 70, repeat: 1 });
     }
   }
 

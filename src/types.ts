@@ -83,6 +83,8 @@ export interface LaneStep {
   weaponHitsAfter?: number;
   /** HP врага ДО атаки — для корректной анимации полоски HP с учётом carry. */
   hpStart?: number;
+  /** HP врага ПОСЛЕ шага: 0 если убит, >0 если боец застрял (оружие кончилось до добивания). */
+  hpAfter?: number;
 }
 
 export interface LaneResult {

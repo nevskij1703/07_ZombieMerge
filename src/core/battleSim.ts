@@ -107,6 +107,7 @@ function simulateLane(lane: Lane, tiers: number[], ctx: BattleCtx): LaneResult {
         weaponTierAfter: s.tier,
         weaponHitsAfter: s.hits,
         hpStart,
+        hpAfter: hp, // >0 — препятствие живо
       });
       return { reachedChest: false, steps, collectedScrap, collectedWeapons, blueprint };
     }
@@ -133,6 +134,7 @@ function simulateLane(lane: Lane, tiers: number[], ctx: BattleCtx): LaneResult {
       weaponTierAfter: s.tier,
       weaponHitsAfter: s.hits,
       hpStart,
+      hpAfter: 0,
     });
   }
 

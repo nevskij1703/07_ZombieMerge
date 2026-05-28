@@ -46,7 +46,12 @@ type LungeStop = StopTarget | StopScrap;
 interface LungeEvent {
   kind: 'lunge';
   stops: LungeStop[]; // в порядке прохождения линии, последний — конечная цель рывка
-  retreat: boolean; // отскок назад к yBottom после рывка
+  retreat: boolean; // короткий отскок «полшажка назад» после рывка (визуально упёрся)
+  /** Если true — вместо короткого backstep делаем ПОЛНЫЙ возврат к yBottom. Ставится
+   *  пост-обработкой для рывка-«последнего на линии» (когда кил-чейн поглотил stuck-by-carry
+   *  как финал, дальше нет stuck-эвента, чтобы вернуть бойца домой). Без этого боец зависает
+   *  у препятствия. */
+  fullRetreat?: boolean;
   /** Эти поля задаются ТОЛЬКО для «итогового» рывка шага (добивающего/застрял-после),
    *  чтобы UI ресурса не дёргался посередине серии ран-рывков. */
   weaponTierAfter?: number;
@@ -416,6 +421,15 @@ export class BattleScene extends Phaser.Scene {
       i = j;
     }
 
+    // Если линия закончилась рывком с короткой ретирадой (chain поглотил stuck-by-carry
+    // как последний шаг и больше событий нет), переводим этот отскок в ПОЛНЫЙ возврат
+    // к воротам — иначе боец визуально зависает у препятствия. stuck/chest эвенты сами
+    // вызывают returnFighter, их трогать не надо.
+    const last = events[events.length - 1];
+    if (last && last.kind === 'lunge' && last.retreat) {
+      last.fullRetreat = true;
+    }
+
     return events;
   }
 
@@ -504,9 +518,12 @@ export class BattleScene extends Phaser.Scene {
         if (ev.weaponTierAfter !== undefined) {
           this.updateFighterWeapon(li, ev.weaponTierAfter, ev.weaponHitsAfter);
         }
-        if (ev.retreat) {
+        if (ev.fullRetreat) {
+          // Финальный возврат к базе (последний event линии после chain-lunge, без stuck).
+          this.returnFighter(li, onDone);
+        } else if (ev.retreat) {
           // Короткий откат «полшажка назад» — только обозначить, что упёрся.
-          // Полное возвращение домой делает только stuck/chest (см. returnFighter).
+          // Полное возвращение домой делает только stuck/chest/fullRetreat.
           const back = this.backstepDistance(li);
           const backY = Math.min(this.yBottom, fighter.y + back);
           const dist = Math.abs(backY - fighter.y);
@@ -698,6 +715,12 @@ export class BattleScene extends Phaser.Scene {
     this.time.timeScale = 1;
     this.tweens.killAll();
     this.time.removeAllEvents();
+
+    // Защита: если кого-то «убило» killAll посередине твина (например, СКИП нажат
+    // во время боя), снепим всех бойцов обратно к воротам, чтобы не висели в воздухе.
+    for (const f of this.fighters) {
+      if (f) f.y = this.yBottom;
+    }
 
     // Применяем результат к сейву (один раз).
     const state = getState();

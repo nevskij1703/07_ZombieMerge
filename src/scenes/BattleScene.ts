@@ -20,6 +20,57 @@ const ZKIND_COLOR: Record<string, number> = {
   strong: 0x9b2222,
 };
 
+// === Lunge-плейбэк ===========================================================
+// Один удар оружием = один «рывок» бойца вперёд. Если удар убивает цель и есть
+// избыток (пробивающий урон) — рывок ПРОДОЛЖАЕТСЯ через следующие препятствия,
+// которые этот же удар добивает в полёте. Рывок завершается, когда:
+//   • первая выжившая цель (ранение карри ИЛИ просто не добили текущим ударом) → отскок;
+//   • цепочка добила всех до сундука/конца линии → боец остаётся на месте,
+//     следующий event (сундук/новый рывок) продолжает с этой точки.
+
+interface StopTarget {
+  kind: 'target';
+  step: LaneStep;
+  hpBefore: number;
+  hpAfter: number;
+  killed: boolean;
+}
+
+interface StopScrap {
+  kind: 'scrap';
+  step: LaneStep;
+}
+
+type LungeStop = StopTarget | StopScrap;
+
+interface LungeEvent {
+  kind: 'lunge';
+  stops: LungeStop[]; // в порядке прохождения линии, последний — конечная цель рывка
+  retreat: boolean; // отскок назад к yBottom после рывка
+  /** Эти поля задаются ТОЛЬКО для «итогового» рывка шага (добивающего/застрял-после),
+   *  чтобы UI ресурса не дёргался посередине серии ран-рывков. */
+  weaponTierAfter?: number;
+  weaponHitsAfter?: number;
+}
+
+interface ChestEvent {
+  kind: 'chest';
+  step: LaneStep;
+  scrapEnRoute: StopScrap[];
+  weaponTierAfter?: number;
+  weaponHitsAfter?: number;
+}
+
+interface StuckEvent {
+  kind: 'stuck';
+  step: LaneStep;
+  scrapEnRoute: StopScrap[];
+  weaponTierAfter?: number;
+  weaponHitsAfter?: number;
+}
+
+type LaneEvent = LungeEvent | ChestEvent | StuckEvent;
+
 // Проигрыш боя по линиям: бойцы бегут вверх, дерутся/отступают, открывают сундуки.
 // Симуляция уже детерминирована (core/battleSim) — сцена только анимирует timeline.
 export class BattleScene extends Phaser.Scene {
@@ -30,9 +81,8 @@ export class BattleScene extends Phaser.Scene {
   private yBottom = 1060;
   private laneWidth = 0;
   // Базовый темп боя (timeScale=1). Раньше был в 2× быстрее — то что игроки увидят на ×4.
-  private readonly MOVE = 440;
-  private readonly SCRAP = 280;
-  private readonly CHEST = 840;
+  private readonly MOVE = 440; // длительность отскока «назад к воротам» (~постоянная).
+  private readonly CHEST = 840; // пауза на анимации открытия сундука.
 
   private fighters: Phaser.GameObjects.Container[] = [];
   private fighterTierTexts: Phaser.GameObjects.Text[] = [];
@@ -194,69 +244,209 @@ export class BattleScene extends Phaser.Scene {
     return this.yBottom - (idx + 1) * spacing;
   }
 
-  private fightTime(hits: number): number {
-    return Phaser.Math.Clamp(hits * 110, 240, 2800);
-  }
+  // Время рывка/отскока — пропорционально дистанции, чтобы скорость бойца была постоянной.
+  private readonly PIXEL_TIME = 2.4; // мс на пиксель вертикального хода
+  private readonly MIN_WALK = 220;
 
   private playLane(li: number): void {
-    const steps = this.result.lanes[li].steps;
-    const fighter = this.fighters[li];
-    let si = 0;
+    const events = this.buildLaneEvents(this.result.lanes[li].steps);
+    this.runEvents(li, events, 0);
+  }
 
-    const finishLane = (): void => {
-      this.lanesDone += 1;
-      if (this.lanesDone >= this.level.cols) this.showResult();
-    };
+  /** Собираем timeline в события «рывков»: один удар = один рывок; добивающий удар
+   *  тащит с собой все шаги, что были добиты пробивающим уроном (carryIn>0 и убиты),
+   *  и заканчивается на первой выжившей цели (carry-ранение). */
+  private buildLaneEvents(steps: LaneStep[]): LaneEvent[] {
+    const events: LaneEvent[] = [];
+    const pendingScrap: StopScrap[] = [];
 
-    const doStep = (): void => {
-      if (this.resultShown) return;
-      if (si >= steps.length) {
-        finishLane();
-        return;
+    let i = 0;
+    while (i < steps.length) {
+      const step = steps[i];
+
+      if (step.kind === 'scrap') {
+        pendingScrap.push({ kind: 'scrap', step });
+        i++;
+        continue;
       }
-      const step: LaneStep = steps[si++];
-      const ty = step.index === -1 ? this.yChest + 46 : this.obstacleY(li, step.index);
-      this.tweens.add({
-        targets: fighter,
-        y: ty,
-        duration: this.MOVE,
-        onComplete: () => {
-          if (this.resultShown) return;
-          if (step.kind === 'scrap') {
-            this.popText(fighter.x, ty, `+${step.scrap}`, '#9fe870');
-            this.time.delayedCall(this.SCRAP, () => {
-              this.updateFighterWeapon(li, step.weaponTierAfter, step.weaponHitsAfter);
-              doStep();
-            });
-          } else if (step.outcome === 'opened') {
-            this.openChest(li);
-            this.popText(fighter.x, this.yChest, 'СУНДУК', '#ffd700');
-            this.time.delayedCall(this.CHEST, () => {
-              this.updateFighterWeapon(li, step.weaponTierAfter, step.weaponHitsAfter);
-              this.returnFighter(li, finishLane);
-            });
-          } else if (step.outcome === 'cleared') {
-            const ft = this.fightTime(step.hitsSpent);
-            this.fightObstacle(li, step, fighter, ft);
-            this.time.delayedCall(ft, () => {
-              this.updateFighterWeapon(li, step.weaponTierAfter, step.weaponHitsAfter);
-              doStep();
-            });
-          } else {
-            // stuck — препятствие остаётся живым, боец отступает
-            const ft = this.fightTime(step.hitsSpent);
-            this.fightObstacle(li, step, fighter, ft);
-            this.popText(fighter.x, ty, 'отступ', '#ff8a8a');
-            this.time.delayedCall(ft, () => {
-              this.updateFighterWeapon(li, step.weaponTierAfter, step.weaponHitsAfter);
-              this.returnFighter(li, finishLane);
-            });
-          }
-        },
-      });
-    };
 
-    doStep();
+      if (step.kind === 'chest') {
+        events.push({
+          kind: 'chest',
+          step,
+          scrapEnRoute: pendingScrap.splice(0),
+          weaponTierAfter: step.weaponTierAfter,
+          weaponHitsAfter: step.weaponHitsAfter,
+        });
+        i++;
+        continue;
+      }
+
+      // Боевой шаг (zombie/crate)
+      const carryIn = step.carryIn ?? 0;
+      const hits = step.hitsSpent;
+      const hpStart = step.hpStart ?? 0;
+      const hpAfter = step.hpAfter ?? 0;
+      const killed = hpAfter <= 0;
+
+      if (hits === 0) {
+        if (carryIn > 0) {
+          // Этот шаг УЖЕ был визуализирован в цепочке предыдущего рывка — пропускаем.
+          i++;
+          continue;
+        }
+        // Боец пришёл к препятствию без оружия — попытка → отскок, линия завершается.
+        events.push({
+          kind: 'stuck',
+          step,
+          scrapEnRoute: pendingScrap.splice(0),
+          weaponTierAfter: step.weaponTierAfter,
+          weaponHitsAfter: step.weaponHitsAfter,
+        });
+        i++;
+        break;
+      }
+
+      // hits > 0: hits ранящих рывков + (если убит) 1 добивающий рывок с возможной цепочкой.
+      const hpAfterCarry = hpStart - carryIn;
+      const minHp = killed ? 0 : hpAfter;
+      const totalHitsDmg = killed ? hpAfterCarry : hpAfterCarry - hpAfter;
+      const dmgPerLunge = totalHitsDmg / hits;
+      const woundCount = killed ? hits - 1 : hits;
+
+      let currentHp = hpAfterCarry;
+      for (let w = 0; w < woundCount; w++) {
+        const newHp = Math.max(minHp, Math.round(currentHp - dmgPerLunge));
+        const stops: LungeStop[] = [];
+        if (pendingScrap.length > 0) stops.push(...pendingScrap.splice(0));
+        stops.push({
+          kind: 'target',
+          step,
+          hpBefore: Math.round(currentHp),
+          hpAfter: newHp,
+          killed: false,
+        });
+        // Промежуточный ран-рывок — НЕ обновляем UI ресурса (он обновится одним
+        // снепом в финальном рывке шага).
+        events.push({ kind: 'lunge', stops, retreat: true });
+        currentHp = newHp;
+      }
+
+      if (!killed) {
+        // Серия ран-рывков закончилась тем, что оружие иссякло. Финал — stuck.
+        events.push({
+          kind: 'stuck',
+          step,
+          scrapEnRoute: pendingScrap.splice(0),
+          weaponTierAfter: step.weaponTierAfter,
+          weaponHitsAfter: step.weaponHitsAfter,
+        });
+        i++;
+        break;
+      }
+
+      // Добивающий рывок: убиваем step, прокидываемся вперёд через carry-цепочку.
+      const stops: LungeStop[] = [];
+      if (pendingScrap.length > 0) stops.push(...pendingScrap.splice(0));
+      stops.push({
+        kind: 'target',
+        step,
+        hpBefore: Math.round(currentHp),
+        hpAfter: 0,
+        killed: true,
+      });
+
+      let j = i + 1;
+      let chainRetreat = false;
+      while (j < steps.length) {
+        const nxt = steps[j];
+        if (nxt.kind === 'scrap') {
+          stops.push({ kind: 'scrap', step: nxt });
+          j++;
+          continue;
+        }
+        if (nxt.kind === 'chest') break;
+        // combat
+        const carryInNxt = nxt.carryIn ?? 0;
+        if (carryInNxt === 0) break; // карри иссяк — рывок завершается
+
+        const hitsNxt = nxt.hitsSpent;
+        const hpStartNxt = nxt.hpStart ?? 0;
+        const hpAfterNxt = nxt.hpAfter ?? 0;
+        const killedByCarry = hitsNxt === 0 && hpAfterNxt === 0;
+
+        if (killedByCarry) {
+          stops.push({
+            kind: 'target',
+            step: nxt,
+            hpBefore: hpStartNxt,
+            hpAfter: 0,
+            killed: true,
+          });
+          j++;
+          continue;
+        }
+
+        // Карри РАНИЛ, но не убил. Это последняя цель рывка → отскок.
+        stops.push({
+          kind: 'target',
+          step: nxt,
+          hpBefore: hpStartNxt,
+          hpAfter: hpStartNxt - carryInNxt,
+          killed: false,
+        });
+        chainRetreat = true;
+        if (hitsNxt > 0) {
+          // У шага есть собственные рывки — отдадим его основному циклу (НЕ j++).
+          break;
+        }
+        // hitsNxt=0 + carryIn>0 + жив = «застрял после ранения карри» → поглощаем.
+        j++;
+        break;
+      }
+
+      events.push({
+        kind: 'lunge',
+        stops,
+        retreat: chainRetreat,
+        weaponTierAfter: step.weaponTierAfter,
+        weaponHitsAfter: step.weaponHitsAfter,
+      });
+
+      i = j;
+    }
+
+    return events;
+  }
+
+  private runEvents(li: number, events: LaneEvent[], idx: number): void {
+    if (this.resultShown) return;
+    if (idx >= events.length) {
+      this.finishLane();
+      return;
+    }
+    const ev = events[idx];
+    const next = (): void => this.runEvents(li, events, idx + 1);
+    switch (ev.kind) {
+      case 'lunge':
+        this.playLunge(li, ev, next);
+        break;
+      case 'chest':
+        this.playChest(li, ev, next);
+        break;
+      case 'stuck':
+        this.playStuck(li, ev, next);
+        break;
+    }
+  }
+
+  private finishLane(): void {
+    this.lanesDone += 1;
+    if (this.lanesDone >= this.level.cols) this.showResult();
+  }
+
+  private walkTime(distance: number): number {
+    return Math.max(this.MIN_WALK, distance * this.PIXEL_TIME);
   }
 
   private returnFighter(li: number, cb: () => void): void {
@@ -272,57 +462,92 @@ export class BattleScene extends Phaser.Scene {
     });
   }
 
-  /**
-   * Анимируем бой по препятствию. HP-бар обновляется ДИСКРЕТНО на каждый удар (мгновенный
-   * снеп — без плавного твина). Если препятствие убито (hpAfter=0) — фейд токена;
-   * если боец застрял (hpAfter>0) — токен остаётся с уменьшенным HP.
-   */
-  private fightObstacle(
-    li: number,
-    step: LaneStep,
-    fighter: Phaser.GameObjects.Container,
-    ft: number,
-  ): void {
-    const idx = step.index;
+  /** Анимируем РЫВОК: один tween бойца вперёд до последней цели, по пути — мгновенные
+   *  снепы HP в каждой точке (без плавных полосок). После рывка — отскок, если ev.retreat. */
+  private playLunge(li: number, ev: LungeEvent, onDone: () => void): void {
+    if (this.resultShown) {
+      onDone();
+      return;
+    }
+    const fighter = this.fighters[li];
+    const stops = ev.stops;
+    if (stops.length === 0) {
+      onDone();
+      return;
+    }
+    const startY = fighter.y;
+    const endY = this.obstacleY(li, stops[stops.length - 1].step.index);
+    const distance = Math.abs(startY - endY);
+    const walk = this.walkTime(distance);
+    const span = Math.max(1, distance);
+
+    // Короткое потряхивание бойца — один «свинг» на рывок.
+    this.tweens.add({ targets: fighter, scaleX: 1.12, yoyo: true, duration: 80 });
+
+    // Tween бойца вперёд до последней точки рывка.
+    this.tweens.add({
+      targets: fighter,
+      y: endY,
+      duration: walk,
+      onComplete: () => {
+        if (this.resultShown) return;
+        if (ev.weaponTierAfter !== undefined) {
+          this.updateFighterWeapon(li, ev.weaponTierAfter, ev.weaponHitsAfter);
+        }
+        if (ev.retreat) {
+          this.tweens.add({
+            targets: fighter,
+            y: this.yBottom,
+            duration: this.MOVE,
+            onComplete: onDone,
+          });
+        } else {
+          onDone();
+        }
+      },
+    });
+
+    // Запланируем мгновенные эффекты по пути.
+    for (const stop of stops) {
+      const stopY = this.obstacleY(li, stop.step.index);
+      const t = (Math.abs(stopY - startY) / span) * walk;
+      this.time.delayedCall(t, () => {
+        if (this.resultShown) return;
+        if (stop.kind === 'target') {
+          this.applyHpSnap(li, stop);
+        } else {
+          this.popText(fighter.x, stopY, `+${stop.step.scrap}`, '#9fe870');
+        }
+      });
+    }
+  }
+
+  /** Мгновенный snap HP-бара/числа + (опц.) фейд токена для убитого. */
+  private applyHpSnap(li: number, t: StopTarget): void {
+    const idx = t.step.index;
     const token = this.obTokens[li]?.[idx];
     const bar = this.obBars[li]?.[idx];
     const barBg = this.obBarBgs[li]?.[idx];
     const hpText = this.obHpTexts[li]?.[idx];
     const maxHp = (bar?.getData('maxHp') as number) ?? 1;
-    const startHp = step.hpStart ?? maxHp;
-    const endHp = step.hpAfter ?? 0;
-    const kills = endHp <= 0;
-    const hits = step.hitsSpent;
+    const hpAfter = Math.max(0, t.hpAfter);
 
     if (bar) {
-      if (hits > 0 && ft > 0) {
-        // Дискретные снепы: каждый удар мгновенно обновляет HP-бар и число.
-        const interval = ft / hits;
-        const drop = (startHp - endHp) / hits;
-        for (let h = 1; h <= hits; h++) {
-          const newHp = Math.max(endHp, Math.round(startHp - drop * h));
-          this.time.delayedCall(interval * h, () => {
-            if (this.resultShown) return;
-            bar.setScale(newHp / maxHp, 1);
-            hpText?.setText(String(newHp));
-            this.tweens.add({ targets: fighter, scaleX: 1.1, yoyo: true, duration: 60 });
-          });
-        }
-      } else {
-        // Пробивающий урон / мгновенное уничтожение — снеп сразу.
-        bar.setScale(endHp / maxHp, 1);
-        hpText?.setText(String(endHp));
-      }
+      bar.setScale(hpAfter / maxHp, 1);
+      hpText?.setText(String(hpAfter));
+    }
+    if (token) {
+      // Короткий «контакт»-флеш на токене (отражает попадание).
+      this.tweens.add({ targets: token, alpha: 0.55, yoyo: true, duration: 90 });
     }
 
-    // Токен исчезает только если враг убит.
-    if (kills && token) {
+    if (t.killed && token) {
       this.tweens.add({
         targets: token,
         alpha: 0,
         scale: 0.2,
-        duration: 180,
-        delay: Math.max(0, ft - 100),
+        duration: 160,
+        delay: 60,
         onComplete: () => {
           token.destroy();
           bar?.destroy();
@@ -333,6 +558,82 @@ export class BattleScene extends Phaser.Scene {
           if (this.obBarBgs[li]) this.obBarBgs[li][idx] = null;
           if (this.obHpTexts[li]) this.obHpTexts[li][idx] = null;
         },
+      });
+    }
+  }
+
+  private playChest(li: number, ev: ChestEvent, onDone: () => void): void {
+    if (this.resultShown) {
+      onDone();
+      return;
+    }
+    const fighter = this.fighters[li];
+    const chestY = this.yChest + 46;
+    const startY = fighter.y;
+    const distance = Math.abs(startY - chestY);
+    const walk = this.walkTime(distance);
+    const span = Math.max(1, distance);
+
+    this.tweens.add({
+      targets: fighter,
+      y: chestY,
+      duration: walk,
+      onComplete: () => {
+        if (this.resultShown) return;
+        this.openChest(li);
+        this.popText(fighter.x, this.yChest, 'СУНДУК', '#ffd700');
+        if (ev.weaponTierAfter !== undefined) {
+          this.updateFighterWeapon(li, ev.weaponTierAfter, ev.weaponHitsAfter);
+        }
+        this.time.delayedCall(this.CHEST, () => {
+          if (this.resultShown) return;
+          this.returnFighter(li, onDone);
+        });
+      },
+    });
+
+    for (const s of ev.scrapEnRoute) {
+      const sY = this.obstacleY(li, s.step.index);
+      const t = (Math.abs(sY - startY) / span) * walk;
+      this.time.delayedCall(t, () => {
+        if (this.resultShown) return;
+        this.popText(fighter.x, sY, `+${s.step.scrap}`, '#9fe870');
+      });
+    }
+  }
+
+  private playStuck(li: number, ev: StuckEvent, onDone: () => void): void {
+    if (this.resultShown) {
+      onDone();
+      return;
+    }
+    const fighter = this.fighters[li];
+    const stuckY = this.obstacleY(li, ev.step.index);
+    const startY = fighter.y;
+    const distance = Math.abs(startY - stuckY);
+    const walk = this.walkTime(distance);
+    const span = Math.max(1, distance);
+
+    this.tweens.add({
+      targets: fighter,
+      y: stuckY,
+      duration: walk,
+      onComplete: () => {
+        if (this.resultShown) return;
+        this.popText(fighter.x, stuckY, 'отступ', '#ff8a8a');
+        if (ev.weaponTierAfter !== undefined) {
+          this.updateFighterWeapon(li, ev.weaponTierAfter, ev.weaponHitsAfter);
+        }
+        this.returnFighter(li, onDone);
+      },
+    });
+
+    for (const s of ev.scrapEnRoute) {
+      const sY = this.obstacleY(li, s.step.index);
+      const t = (Math.abs(sY - startY) / span) * walk;
+      this.time.delayedCall(t, () => {
+        if (this.resultShown) return;
+        this.popText(fighter.x, sY, `+${s.step.scrap}`, '#9fe870');
       });
     }
   }

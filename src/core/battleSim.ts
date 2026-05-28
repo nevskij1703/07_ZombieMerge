@@ -71,11 +71,12 @@ function simulateLane(lane: Lane, tiers: number[], ctx: BattleCtx): LaneResult {
     let hitsSpent = 0;
     let depleted = false;
 
-    // 1) Применяем накопленный пробивающий урон.
+    // 1) Применяем накопленный пробивающий урон (вошёл из ПРОШЛОГО удара).
+    let carryAbsorbed = 0;
     if (carry > 0) {
-      const absorbed = Math.min(carry, hp);
-      hp -= absorbed;
-      carry -= absorbed;
+      carryAbsorbed = Math.min(carry, hp);
+      hp -= carryAbsorbed;
+      carry -= carryAbsorbed;
     }
 
     // 2) Бьём, пока враг жив или не кончатся оружия.
@@ -108,6 +109,8 @@ function simulateLane(lane: Lane, tiers: number[], ctx: BattleCtx): LaneResult {
         weaponHitsAfter: s.hits,
         hpStart,
         hpAfter: hp, // >0 — препятствие живо
+        carryIn: carryAbsorbed > 0 ? carryAbsorbed : undefined,
+        // carryOut не пишем: последний удар не убил, излишка нет.
       });
       return { reachedChest: false, steps, collectedScrap, collectedWeapons, blueprint };
     }
@@ -135,6 +138,8 @@ function simulateLane(lane: Lane, tiers: number[], ctx: BattleCtx): LaneResult {
       weaponHitsAfter: s.hits,
       hpStart,
       hpAfter: 0,
+      carryIn: carryAbsorbed > 0 ? carryAbsorbed : undefined,
+      carryOut: carry > 0 ? carry : undefined, // последний удар произвёл избыток — пойдёт на следующего
     });
   }
 

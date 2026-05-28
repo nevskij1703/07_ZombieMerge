@@ -64,7 +64,9 @@ export interface LevelGenConfig {
    *  rng()<crateLaneChance → линия имеет 1 коробку, иначе — ноль. (Раньше было per-obstacle
    *  и плодило слишком много коробок; коробки теперь редкое сильное событие.) */
   crateLaneChance: number;
-  crateHp: number;
+  /** Множитель к HP сильнейшего зомби в данной линии — столько HP получит коробка.
+   *  По тз: коробки должны быть в ~2 раза крепче сильнейшего зомби на уровне. */
+  crateHpMultiplier: number;
   /** Вероятность (0..1) что разбитый ящик роняет оружие (иначе только лом). */
   crateWeaponChance: number;
   /** Тир оружия в коробке = bestTier + uniform[crateWeaponOffsetMin..crateWeaponOffsetMax].
@@ -80,6 +82,17 @@ export interface LevelGenConfig {
    *  быть от 60% до 140% базового зомби-бюджета (player не может стабильно угадать,
    *  куда ставить топовое оружие). */
   laneDifficultySpread: number;
+  /** Сила «перемешивания» зомби по типам в линии (sort with jitter):
+   *  0 = чётко отсортировано (weak→medium→strong, как было).
+   *  3-4 = заметное размытие границ (по тз: блендинг типов).
+   *  Больше = почти случайный порядок. */
+  zombieOrderJitter: number;
+  /** Доля strong-зомби — линейный рост по уровню (после strongFromLevel), с потолком. */
+  strongCap: number;
+  strongGrowthPerLevel: number;
+  /** Доля medium-зомби — линейный рост, потолок. */
+  mediumCap: number;
+  mediumGrowthPerLevel: number;
 }
 
 export interface Balance {
@@ -162,10 +175,12 @@ export const balance: Balance = {
     ],
   },
 
+  // Спред по HP в ~5-6× между типами (по тз — ×5-10): strong получается «боссовый»,
+  // его сложно убить без топовых оружий, поэтому таких зомби должно быть мало.
   zombies: {
-    weak: { hp: 6 },
-    medium: { hp: 18 },
-    strong: { hp: 45 },
+    weak: { hp: 5 },
+    medium: { hp: 25 },
+    strong: { hp: 150 },
   },
 
   levelGen: {
@@ -175,16 +190,16 @@ export const balance: Balance = {
     // проходима). Сложность держит низкий ресурс оружий (T1=4 ... T12=15) и редкие коробки.
     // См. scripts/autotest-cli.ts.
     baseZombieCount: 3,
-    // С лутбоксами игрок получает «бесплатные» оружия из сундуков — сложность зомби
-    // должна расти быстрее, иначе late-game становится тривиальным.
-    zombieCountPerLevel: 1.5,
+    // Рост зомби умеренный — основной драйвер сложности теперь HP-спред ×5-6, а не количество.
+    zombieCountPerLevel: 0.85,
     mediumFromLevel: 6,
     strongFromLevel: 16,
     // ПЕРЕИМЕНОВАНИЕ И СЕМАНТИКА: per-lane (вместо per-obstacle). Половина линий получит ОДНУ
     // коробку, остальные — ноль. Если в локальном override был старый ключ crateChance, он будет
     // проигнорирован (semantically incompatible).
     crateLaneChance: 0.5,
-    crateHp: 12,
+    // По тз: коробка ~×2 HP сильнейшего зомби на уровне (динамически в genLane).
+    crateHpMultiplier: 2.0,
     // Раз коробки редкие — пусть, когда выпадают, дают оружие чаще (было 0.3, стало 0.6).
     crateWeaponChance: 0.6,
     // По тз: «оружие в коробках — на 1-2 разряда меньше чем самое сильное у игрока».
@@ -197,6 +212,15 @@ export const balance: Balance = {
     scrapPerPile: 7,
     // Линии в одном уровне теперь разной нагрузки: множитель в [0.6, 1.4]. Меняется с уровнем (seed).
     laneDifficultySpread: 0.4,
+    // Размытие границ между типами зомби в линии. ±3 позиции — заметный блендинг,
+    // не «жёсткая стена» weak/medium/strong, как было.
+    zombieOrderJitter: 3,
+    // Strong — редкий (×6 HP medium → cap 0.08 = не больше 8% линии = «боссы»).
+    strongCap: 0.08,
+    strongGrowthPerLevel: 0.02,
+    // Medium — заметная часть линии, но не доминирующая (HP ×5 weak делает их и так непростыми).
+    mediumCap: 0.4,
+    mediumGrowthPerLevel: 0.05,
   },
 
   chest: {

@@ -80,23 +80,29 @@ function genLane(
   let medium = 0;
   let strong = 0;
   if (level >= b.levelGen.mediumFromLevel) {
-    medium = Math.round(zombieCount * Math.min(0.5, 0.12 * (level - b.levelGen.mediumFromLevel + 1)));
+    const ratio = Math.min(b.levelGen.mediumCap, b.levelGen.mediumGrowthPerLevel * (level - b.levelGen.mediumFromLevel + 1));
+    medium = Math.round(zombieCount * ratio);
   }
   if (level >= b.levelGen.strongFromLevel) {
-    strong = Math.round(zombieCount * Math.min(0.4, 0.08 * (level - b.levelGen.strongFromLevel + 1)));
+    const ratio = Math.min(b.levelGen.strongCap, b.levelGen.strongGrowthPerLevel * (level - b.levelGen.strongFromLevel + 1));
+    strong = Math.round(zombieCount * ratio);
   }
   const weak = Math.max(0, zombieCount - medium - strong);
 
+  // Sort-with-jitter: размытое распределение. Без jitter — weak строго в начале, strong в
+  // конце; с jitter>0 границы между типами «дышат» (по тз — блендинг, не жёсткие стены).
+  const jitter = b.levelGen.zombieOrderJitter ?? 0;
+  const lineup: ZombieKind[] = [];
+  for (let i = 0; i < weak; i++) lineup.push('weak');
+  for (let i = 0; i < medium; i++) lineup.push('medium');
+  for (let i = 0; i < strong; i++) lineup.push('strong');
+  const positioned = lineup.map((k, i) => ({ kind: k, pos: i + (jitter > 0 ? (rng() - 0.5) * 2 * jitter : 0) }));
+  positioned.sort((a, b) => a.pos - b.pos);
+
   const obstacles: Obstacle[] = [];
-  const pushZombies = (kind: ZombieKind, n: number): void => {
-    for (let i = 0; i < n; i++) {
-      obstacles.push({ kind: 'zombie', zombieKind: kind, hp: b.zombies[kind].hp, scrap: 0 });
-    }
-  };
-  // усложнение к концу линии: слабые -> средние -> сильные
-  pushZombies('weak', weak);
-  pushZombies('medium', medium);
-  pushZombies('strong', strong);
+  for (const item of positioned) {
+    obstacles.push({ kind: 'zombie', zombieKind: item.kind, hp: b.zombies[item.kind].hp, scrap: 0 });
+  }
 
   // Per-lane: с шансом crateLaneChance — ровно ОДНА коробка, иначе никакой.
   if (rng() < b.levelGen.crateLaneChance) {
@@ -108,9 +114,16 @@ function genLane(
       const off = rint(rng, b.levelGen.crateWeaponOffsetMin, b.levelGen.crateWeaponOffsetMax);
       crateWeaponTier = clampTier(playerCtx.bestTier + off);
     }
+    // По тз: коробка имеет HP в ~2× HP сильнейшего зомби на уровне (динамически).
+    const strongestHp = Math.max(
+      b.zombies.weak.hp,
+      medium > 0 ? b.zombies.medium.hp : 0,
+      strong > 0 ? b.zombies.strong.hp : 0,
+    );
+    const crateHp = Math.max(1, Math.round(strongestHp * (b.levelGen.crateHpMultiplier ?? 2)));
     obstacles.splice(pos, 0, {
       kind: 'crate',
-      hp: b.levelGen.crateHp,
+      hp: crateHp,
       scrap: b.levelGen.scrapPerPile,
       weaponTier: crateWeaponTier,
     });

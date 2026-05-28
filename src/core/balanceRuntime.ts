@@ -26,7 +26,9 @@ function deepMerge(base: any, override: any): any {
 }
 
 function compute(): Balance {
-  if (!import.meta.env.DEV) return baseBalance;
+  // import.meta.env инжектится Vite при сборке. В чистом node (например, CLI-прогон autotest
+  // через tsx) объект env undefined — тогда работаем без override.
+  if (!import.meta.env?.DEV) return baseBalance;
   try {
     const raw = localStorage.getItem(OVERRIDE_KEY);
     if (!raw) return clone(baseBalance);

@@ -2,7 +2,7 @@
 
 import type { SaveState, BattleResult, FieldState, WeaponTier } from '../types';
 import { maxTier } from './weapons';
-import { addLoot, resizeField } from './merge';
+import { resizeField } from './merge';
 import { getFieldSize } from './levelGen';
 import { getBalance } from './balanceRuntime';
 
@@ -22,12 +22,13 @@ export function laneArsenals(field: FieldState): WeaponTier[][] {
 
 /**
  * Применить результат боя к сейву. Оружие столбцов остаётся на поле (возвращается на места);
- * добавляется только собранный лут (в свободные клетки, переполнение -> инвентарь).
+ * собранный лут отправляется ТОЛЬКО в инвентарь (игрок сам решит, когда выносить — это
+ * сохраняет тактику расстановки и не мешает текущей раскладке поля).
  * Чертёж повышает тир Мастерской. Пройденный уровень -> +1 и рост поля.
  */
 export function applyBattleResult(state: SaveState, result: BattleResult): void {
   state.scrap += result.totalScrap;
-  for (const tier of result.totalWeapons) addLoot(state.field, state.inventory, tier);
+  for (const tier of result.totalWeapons) state.inventory.push(tier);
   if (result.blueprints > 0) {
     state.workshopTier = Math.min(maxTier(), state.workshopTier + result.blueprints);
   }

@@ -21,12 +21,20 @@ export function generateLevel(level: number): Level {
   const roadLength = Math.round(
     b.levelGen.baseRoadLength + b.levelGen.roadLengthPerLevel * (level - 1),
   );
-  const zombieCount = Math.max(
+  const baseZombieCount = Math.max(
     1,
     Math.round(b.levelGen.baseZombieCount + b.levelGen.zombieCountPerLevel * (level - 1)),
   );
+  const spread = b.levelGen.laneDifficultySpread ?? 0;
+
   const lanes: Lane[] = [];
-  for (let c = 0; c < cols; c++) lanes.push(genLane(b, rng, level, zombieCount));
+  for (let c = 0; c < cols; c++) {
+    // Множитель сложности этой линии — детерминированно из seed-rng, разный для каждой линии и
+    // уровня. Так игрок не угадает «крайняя левая всегда лёгкая» и не разложит оружие шаблонно.
+    const factor = spread > 0 ? 1 + (rng() * 2 - 1) * spread : 1;
+    const laneZombies = Math.max(1, Math.round(baseZombieCount * factor));
+    lanes.push(genLane(b, rng, level, laneZombies));
+  }
   return { number: level, cols, rows, roadLength, lanes };
 }
 
@@ -52,8 +60,8 @@ function genLane(b: Balance, rng: () => number, level: number, zombieCount: numb
   pushZombies('medium', medium);
   pushZombies('strong', strong);
 
-  const crateCount = Math.round(zombieCount * b.levelGen.crateChance);
-  for (let i = 0; i < crateCount; i++) {
+  // Per-lane: с шансом crateLaneChance — ровно ОДНА коробка, иначе никакой.
+  if (rng() < b.levelGen.crateLaneChance) {
     const pos = rint(rng, 0, obstacles.length);
     obstacles.splice(pos, 0, {
       kind: 'crate',

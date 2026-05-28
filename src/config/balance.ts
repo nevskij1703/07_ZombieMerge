@@ -42,8 +42,10 @@ export interface LevelGenConfig {
   /** С какого уровня в составе появляются средние / сильные зомби. */
   mediumFromLevel: number;
   strongFromLevel: number;
-  /** Вероятность (0..1) что слот препятствия — ящик (а не зомби). */
-  crateChance: number;
+  /** Вероятность (0..1) что ДАННАЯ линия получит ОДНУ коробку. Применяется per-lane:
+   *  rng()<crateLaneChance → линия имеет 1 коробку, иначе — ноль. (Раньше было per-obstacle
+   *  и плодило слишком много коробок; коробки теперь редкое сильное событие.) */
+  crateLaneChance: number;
   crateHp: number;
   /** Вероятность (0..1) что разбитый ящик роняет оружие (иначе только лом). */
   crateWeaponChance: number;
@@ -51,6 +53,11 @@ export interface LevelGenConfig {
   scrapPilesMin: number;
   scrapPilesMax: number;
   scrapPerPile: number;
+  /** Разброс «нагрузки» между линиями одного уровня: множитель кол-ва зомби в линии
+   *  выбирается из [1-spread, 1+spread]. 0 — все линии одинаковые. 0.4 — линии могут
+   *  быть от 60% до 140% базового зомби-бюджета (player не может стабильно угадать,
+   *  куда ставить топовое оружие). */
+  laneDifficultySpread: number;
 }
 
 export interface Balance {
@@ -82,19 +89,21 @@ export interface Balance {
 export const balance: Balance = {
   maxTier: 12,
 
+  // Ресурс — линейный N+3 (T1=4 ... T12=15). Оружия быстрее выходят из строя,
+  // нужно чаще производить/мерджить. damagePerHit — без изменений.
   weapons: {
-    1: { name: 'Труба', damagePerHit: 2, hits: 6 },
-    2: { name: 'Лом', damagePerHit: 3, hits: 8 },
-    3: { name: 'Топор', damagePerHit: 5, hits: 10 },
-    4: { name: 'Нож', damagePerHit: 7, hits: 12 },
-    5: { name: 'Катана', damagePerHit: 10, hits: 16 },
-    6: { name: 'Пистолет', damagePerHit: 14, hits: 20 },
-    7: { name: 'Узи', damagePerHit: 20, hits: 26 },
-    8: { name: 'Автомат', damagePerHit: 28, hits: 34 },
-    9: { name: 'Пулемёт', damagePerHit: 40, hits: 44 },
-    10: { name: 'Гранатомёт', damagePerHit: 56, hits: 56 },
-    11: { name: 'Огнемёт', damagePerHit: 78, hits: 72 },
-    12: { name: 'Рейлган', damagePerHit: 110, hits: 92 },
+    1: { name: 'Труба', damagePerHit: 2, hits: 4 },
+    2: { name: 'Лом', damagePerHit: 3, hits: 5 },
+    3: { name: 'Топор', damagePerHit: 5, hits: 6 },
+    4: { name: 'Нож', damagePerHit: 7, hits: 7 },
+    5: { name: 'Катана', damagePerHit: 10, hits: 8 },
+    6: { name: 'Пистолет', damagePerHit: 14, hits: 9 },
+    7: { name: 'Узи', damagePerHit: 20, hits: 10 },
+    8: { name: 'Автомат', damagePerHit: 28, hits: 11 },
+    9: { name: 'Пулемёт', damagePerHit: 40, hits: 12 },
+    10: { name: 'Гранатомёт', damagePerHit: 56, hits: 13 },
+    11: { name: 'Огнемёт', damagePerHit: 78, hits: 14 },
+    12: { name: 'Рейлган', damagePerHit: 110, hits: 15 },
   },
 
   workshop: {
@@ -138,22 +147,32 @@ export const balance: Balance = {
   levelGen: {
     baseRoadLength: 8,
     roadLengthPerLevel: 0.6,
+    // Цель: ~50-60% линий дошли до сундука в среднем (часть валится, но прогрессия до L50
+    // проходима). Сложность держит низкий ресурс оружий (T1=4 ... T12=15) и редкие коробки.
+    // См. scripts/autotest-cli.ts.
     baseZombieCount: 3,
-    zombieCountPerLevel: 0.75,
+    zombieCountPerLevel: 0.5,
     mediumFromLevel: 6,
     strongFromLevel: 16,
-    crateChance: 0.18,
+    // ПЕРЕИМЕНОВАНИЕ И СЕМАНТИКА: per-lane (вместо per-obstacle). Половина линий получит ОДНУ
+    // коробку, остальные — ноль. Если в локальном override был старый ключ crateChance, он будет
+    // проигнорирован (semantically incompatible).
+    crateLaneChance: 0.5,
     crateHp: 12,
-    crateWeaponChance: 0.3,
+    // Раз коробки редкие — пусть, когда выпадают, дают оружие чаще (было 0.3, стало 0.6).
+    crateWeaponChance: 0.6,
     scrapPilesMin: 1,
     scrapPilesMax: 2,
     scrapPerPile: 4,
+    // Линии в одном уровне теперь разной нагрузки: множитель в [0.6, 1.4]. Меняется с уровнем (seed).
+    laneDifficultySpread: 0.4,
   },
 
   chest: {
-    scrapMin: 10,
-    scrapMax: 25,
-    weaponChance: 0.6,
+    // Компенсация за редкость коробок — больше скрапа в сундуках.
+    scrapMin: 14,
+    scrapMax: 32,
+    weaponChance: 0.7,
     weaponTierOffset: 1,
     blueprintChance: 0, // апгрейды Цеха детерминированы (workshop.upgradeAtLevels). 0 — нет рандома.
   },

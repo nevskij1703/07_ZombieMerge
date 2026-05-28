@@ -31,6 +31,11 @@ export interface LevelSample {
   scrapGained: number;
   weaponsLooted: number;
   blueprints: number;
+  /** Сколько линий дошли до сундука / общее число линий в этом уровне. Метрика
+   *  «насколько игра тяжёлая»: чем меньше lanesReached/lanesTotal, тем чаще игрок видит
+   *  не-всеми-добежавший исход. ~70% — комфорт, ~50% — сложно, <30% — стенка. */
+  lanesReached: number;
+  lanesTotal: number;
 }
 
 export interface AutotestReport {
@@ -190,6 +195,7 @@ export function runAutotest(maxLevel = 50, maxAttemptsPerLevel = 50): AutotestRe
     }
 
     const result = lastResult!;
+    const lanesReached = result.lanes.filter((l) => l.reachedChest).length;
     const sample: LevelSample = {
       level: state.level,
       cols: state.field.cols,
@@ -204,6 +210,8 @@ export function runAutotest(maxLevel = 50, maxAttemptsPerLevel = 50): AutotestRe
       scrapGained: result.totalScrap,
       weaponsLooted: result.totalWeapons.length,
       blueprints: result.blueprints,
+      lanesReached,
+      lanesTotal: result.lanes.length,
     };
     samples.push(sample);
     totalProduced += producedThisLevel;

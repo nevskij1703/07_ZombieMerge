@@ -4,6 +4,7 @@
 
 import type { FieldState, WeaponTier } from '../types';
 import { canMergeTier, nextTier } from './weapons';
+import { isWeaponCellValue } from './lootbox';
 
 export function cellCount(f: FieldState): number {
   return f.cols * f.rows;
@@ -55,7 +56,8 @@ export function canMergeIndices(f: FieldState, a: number, b: number): boolean {
   if (a === b) return false;
   const ta = f.cells[a];
   const tb = f.cells[b];
-  if (ta == null || tb == null) return false;
+  // Лутбоксы не мерджатся (хранятся в клетках как спец-коды).
+  if (!isWeaponCellValue(ta) || !isWeaponCellValue(tb)) return false;
   return ta === tb && canMergeTier(ta);
 }
 

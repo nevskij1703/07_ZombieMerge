@@ -23,14 +23,32 @@ export interface ZombieDef {
 }
 
 export interface ChestReward {
+  /** Если выпала награда `scrap` — этот диапазон случайного количества лома. */
   scrapMin: number;
   scrapMax: number;
-  /** Шанс (0..1) что в сундуке будет оружие. */
-  weaponChance: number;
-  /** Тир оружия из сундука = workshopTier + этот сдвиг. */
-  weaponTierOffset: number;
-  /** Шанс (0..1) случайного чертежа в сундуке — редкий бонус. */
-  blueprintChance: number;
+  /** Веса наград в сундуке (нормализуются). Ровно одна выпадает. */
+  rewardWeights: { scrap: number; weapon: number; lootbox: number };
+  /** Тир оружия в сундуке = workshopTier + uniform[chestWeaponOffsetMin..chestWeaponOffsetMax].
+   *  Симметричный диапазон ±2 даёт «как у игрока, иногда чуть лучше/хуже». */
+  chestWeaponOffsetMin: number;
+  chestWeaponOffsetMax: number;
+}
+
+export interface LootboxBalance {
+  /** Доля medium среди выпавших лутбоксов (4:1 = mediumShare 0.8). */
+  mediumShare: number;
+  /** Тир оружия в medium-лутбоксе = workshopTier + uniform[mediumOffsetMin..mediumOffsetMax]. */
+  mediumOffsetMin: number;
+  mediumOffsetMax: number;
+  /** Тир оружия в elite-лутбоксе = bestTier + uniform[eliteOffsetMin..eliteOffsetMax].
+   *  Отрицательные значения = ниже лучшего тира игрока (всё равно обычно лучше workshop). */
+  eliteOffsetMin: number;
+  eliteOffsetMax: number;
+}
+
+export interface TrashBalance {
+  /** Доля от стоимости производства, которая возвращается за удаление оружия в трэш. */
+  refundRatio: number;
 }
 
 export interface LevelGenConfig {
@@ -49,6 +67,10 @@ export interface LevelGenConfig {
   crateHp: number;
   /** Вероятность (0..1) что разбитый ящик роняет оружие (иначе только лом). */
   crateWeaponChance: number;
+  /** Тир оружия в коробке = bestTier + uniform[crateWeaponOffsetMin..crateWeaponOffsetMax].
+   *  Отрицательные значения — оружие НИЖЕ лучшего у игрока (по тз: -1..-2). */
+  crateWeaponOffsetMin: number;
+  crateWeaponOffsetMax: number;
   /** Сколько куч металлолома на дороге и сколько в каждой. */
   scrapPilesMin: number;
   scrapPilesMax: number;
@@ -80,6 +102,8 @@ export interface Balance {
   zombies: Record<ZombieKind, ZombieDef>;
   levelGen: LevelGenConfig;
   chest: ChestReward;
+  lootbox: LootboxBalance;
+  trash: TrashBalance;
   economy: {
     startScrap: number;
     startDiamonds: number;
@@ -151,7 +175,9 @@ export const balance: Balance = {
     // проходима). Сложность держит низкий ресурс оружий (T1=4 ... T12=15) и редкие коробки.
     // См. scripts/autotest-cli.ts.
     baseZombieCount: 3,
-    zombieCountPerLevel: 0.5,
+    // С лутбоксами игрок получает «бесплатные» оружия из сундуков — сложность зомби
+    // должна расти быстрее, иначе late-game становится тривиальным.
+    zombieCountPerLevel: 1.5,
     mediumFromLevel: 6,
     strongFromLevel: 16,
     // ПЕРЕИМЕНОВАНИЕ И СЕМАНТИКА: per-lane (вместо per-obstacle). Половина линий получит ОДНУ
@@ -161,20 +187,44 @@ export const balance: Balance = {
     crateHp: 12,
     // Раз коробки редкие — пусть, когда выпадают, дают оружие чаще (было 0.3, стало 0.6).
     crateWeaponChance: 0.6,
-    scrapPilesMin: 1,
-    scrapPilesMax: 2,
-    scrapPerPile: 4,
+    // По тз: «оружие в коробках — на 1-2 разряда меньше чем самое сильное у игрока».
+    crateWeaponOffsetMin: -2,
+    crateWeaponOffsetMax: -1,
+    // Кучи лома на дороге — основной источник скрапа теперь, когда сундук даёт лом только
+    // в 15% случаев (остальное — оружие/лутбоксы).
+    scrapPilesMin: 2,
+    scrapPilesMax: 3,
+    scrapPerPile: 7,
     // Линии в одном уровне теперь разной нагрузки: множитель в [0.6, 1.4]. Меняется с уровнем (seed).
     laneDifficultySpread: 0.4,
   },
 
   chest: {
-    // Компенсация за редкость коробок — больше скрапа в сундуках.
+    // Сундук даёт РОВНО одну награду: scrap | weapon | lootbox. По тз — лутбоксы в 65%
+    // случаев, остальное делю: weapon чуть выгоднее scrap для прогрессии оружий.
     scrapMin: 14,
     scrapMax: 32,
-    weaponChance: 0.7,
-    weaponTierOffset: 1,
-    blueprintChance: 0, // апгрейды Цеха детерминированы (workshop.upgradeAtLevels). 0 — нет рандома.
+    rewardWeights: { scrap: 0.15, weapon: 0.20, lootbox: 0.65 },
+    // По тз: «в сундуке оружие ~как производит игрок, ±1-2 разряда равновероятно».
+    chestWeaponOffsetMin: -2,
+    chestWeaponOffsetMax: 2,
+  },
+
+  lootbox: {
+    // По тз: средние выпадают в 4 раза чаще крутых → mediumShare = 0.8.
+    mediumShare: 0.8,
+    // «Средние лутбоксы содержат оружие на 0-1 порядок лучше чем производит игрок».
+    mediumOffsetMin: 0,
+    mediumOffsetMax: 1,
+    // «Крутые — на 0-2 порядка хуже чем самое крутое у игрока». В большинстве кейсов best >
+    // workshop, так что elite даёт оружие СИЛЬНЕЕ medium — выгодный, но редкий приз.
+    eliteOffsetMin: -2,
+    eliteOffsetMax: 0,
+  },
+
+  trash: {
+    // Удаление оружия → возврат 50% от стоимости производства того же тира.
+    refundRatio: 0.5,
   },
 
   economy: {

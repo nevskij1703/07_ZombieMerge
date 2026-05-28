@@ -6,6 +6,12 @@ export type WeaponTier = number;
 /** Типы зомби в MVP. */
 export type ZombieKind = 'weak' | 'medium' | 'strong';
 
+/** Типы лутбоксов из сундуков. medium — около произв. тира, elite — около лучшего у игрока. */
+export type LootboxKind = 'medium' | 'elite';
+
+/** Что выпадает из сундука. Ровно ОДНО за сундук. */
+export type ChestRewardKind = 'scrap' | 'weapon' | 'lootbox';
+
 /** Состояние мердж-поля. cells — row-major, длина = cols*rows; tier либо null (пусто). */
 export interface FieldState {
   cols: number;
@@ -47,13 +53,20 @@ export interface Obstacle {
   hp: number; // hp зомби/ящика; 0 для кучи лома
   zombieKind?: ZombieKind;
   scrap: number; // сколько лома даёт (куча или лут из ящика)
-  weapon: boolean; // ящик роняет оружие
+  /** Если задан — коробка содержит оружие этого тира (определяется на генерации уровня
+   *  с учётом лучшего тира у игрока: best + offset из balance.crate). undefined — лома только. */
+  weaponTier?: WeaponTier;
 }
 
+/** Сундук в конце линии. РОВНО одна награда (взвешенно выбирается на генерации):
+ *  'scrap' — игроку даётся `scrap` лома;
+ *  'weapon' — оружие тира `weaponTier`;
+ *  'lootbox' — лутбокс типа `lootboxKind`, который кладётся в клетку поля или в инвентарь. */
 export interface ChestDef {
-  scrap: number;
-  weapon: boolean;
-  blueprint: boolean;
+  reward: ChestRewardKind;
+  scrap?: number;
+  weaponTier?: WeaponTier;
+  lootboxKind?: LootboxKind;
 }
 
 export interface Lane {
@@ -77,7 +90,8 @@ export interface LaneStep {
   hitsSpent: number; // для тайминга анимации; 0 если врага добил «пробивающий» урон
   scrap: number;
   weaponTier?: number;
-  blueprint?: boolean;
+  /** Для chest-step c reward='lootbox' — какой именно лутбокс игрок забирает. */
+  lootboxKind?: LootboxKind;
   /** Текущее активное оружие у бойца ПОСЛЕ этого шага (если есть). Для UI. */
   weaponTierAfter?: number;
   weaponHitsAfter?: number;
@@ -99,7 +113,7 @@ export interface LaneResult {
   steps: LaneStep[];
   collectedScrap: number;
   collectedWeapons: WeaponTier[];
-  blueprint: boolean;
+  collectedLootboxes: LootboxKind[];
 }
 
 export interface BattleResult {
@@ -108,5 +122,5 @@ export interface BattleResult {
   lanes: LaneResult[];
   totalScrap: number;
   totalWeapons: WeaponTier[];
-  blueprints: number;
+  totalLootboxes: LootboxKind[];
 }

@@ -1,23 +1,24 @@
 // Детерминированная боевая симуляция по линиям. Возвращает исход + пошаговый timeline
 // (для проигрыша в BattleScene). Модель оружия: сильнейшее бьёт первым; когда его ресурс
 // кончился — следующее по силе; всё израсходовано — боец отступает. Нельзя умереть.
+//
+// Тиры оружия для коробок/сундуков уже зашиты в Level (см. levelGen). battleSim ничего
+// не рандомит и не зависит от состояния игрока.
 
-import type { Level, Lane, LaneResult, LaneStep, BattleResult, WeaponTier } from '../types';
-import { getWeapon, maxTier } from './weapons';
-import { getBalance } from './balanceRuntime';
+import type { Level, Lane, LaneResult, LaneStep, BattleResult, WeaponTier, LootboxKind } from '../types';
+import { getWeapon } from './weapons';
 
+// eslint-disable-next-line @typescript-eslint/no-empty-interface
 export interface BattleCtx {
-  /** Текущий тир Мастерской — от него масштабируется лут (ящики/сундук). */
-  workshopTier: number;
+  // Поле зарезервировано для будущих расширений (например, бонусы Бойцов).
+  // Тиры наград сейчас приходят в Level из levelGen и не зависят от ctx.
+  // Сохраняем интерфейс, чтобы не ломать существующие вызовы.
+  workshopTier?: number;
 }
 
 interface ArsenalWeapon {
   tier: number;
   hits: number;
-}
-
-function clampTier(t: number): number {
-  return Math.max(1, Math.min(maxTier(), t));
 }
 
 function buildArsenal(tiers: number[]): ArsenalWeapon[] {
@@ -32,12 +33,12 @@ function strongestAvailable(ars: ArsenalWeapon[]): ArsenalWeapon | null {
   return best;
 }
 
-function simulateLane(lane: Lane, tiers: number[], ctx: BattleCtx): LaneResult {
+function simulateLane(lane: Lane, tiers: number[]): LaneResult {
   const ars = buildArsenal(tiers);
   const steps: LaneStep[] = [];
   let collectedScrap = 0;
   const collectedWeapons: WeaponTier[] = [];
-  let blueprint = false;
+  const collectedLootboxes: LootboxKind[] = [];
   // «Пробивающий» урон: если предыдущий удар нанёс больше HP врага, остаток
   // переносится на следующее боевое препятствие на этой же линии.
   let carry = 0;
@@ -108,21 +109,21 @@ function simulateLane(lane: Lane, tiers: number[], ctx: BattleCtx): LaneResult {
         weaponTierAfter: s.tier,
         weaponHitsAfter: s.hits,
         hpStart,
-        hpAfter: hp, // >0 — препятствие живо
+        hpAfter: hp,
         carryIn: carryAbsorbed > 0 ? carryAbsorbed : undefined,
-        // carryOut не пишем: последний удар не убил, излишка нет.
       });
-      return { reachedChest: false, steps, collectedScrap, collectedWeapons, blueprint };
+      return { reachedChest: false, steps, collectedScrap, collectedWeapons, collectedLootboxes };
     }
 
     let gainedScrap = 0;
-    let gainedTier: number | undefined;
+    let gainedTier: WeaponTier | undefined;
     if (ob.kind === 'crate') {
       gainedScrap = ob.scrap;
       collectedScrap += gainedScrap;
-      if (ob.weapon) {
-        gainedTier = clampTier(ctx.workshopTier - 1);
+      if (ob.weaponTier !== undefined) {
+        gainedTier = ob.weaponTier;
         collectedWeapons.push(gainedTier);
+        // Подобранное в пути оружие сразу подключается к арсеналу этой линии.
         ars.push({ tier: gainedTier, hits: getWeapon(gainedTier).hits });
       }
     }
@@ -139,43 +140,49 @@ function simulateLane(lane: Lane, tiers: number[], ctx: BattleCtx): LaneResult {
       hpStart,
       hpAfter: 0,
       carryIn: carryAbsorbed > 0 ? carryAbsorbed : undefined,
-      carryOut: carry > 0 ? carry : undefined, // последний удар произвёл избыток — пойдёт на следующего
+      carryOut: carry > 0 ? carry : undefined,
     });
   }
 
-  // Дошёл до конца — открывает сундук.
+  // Дошёл до конца — открывает сундук. РОВНО одна награда.
   const chest = lane.chest;
-  collectedScrap += chest.scrap;
-  let chestTier: number | undefined;
-  if (chest.weapon) {
-    chestTier = clampTier(ctx.workshopTier + getBalance().chest.weaponTierOffset);
-    collectedWeapons.push(chestTier);
+  let chestScrap = 0;
+  let chestWeaponTier: WeaponTier | undefined;
+  let chestLootbox: LootboxKind | undefined;
+  if (chest.reward === 'scrap') {
+    chestScrap = chest.scrap ?? 0;
+    collectedScrap += chestScrap;
+  } else if (chest.reward === 'weapon' && chest.weaponTier !== undefined) {
+    chestWeaponTier = chest.weaponTier;
+    collectedWeapons.push(chestWeaponTier);
+  } else if (chest.reward === 'lootbox' && chest.lootboxKind) {
+    chestLootbox = chest.lootboxKind;
+    collectedLootboxes.push(chestLootbox);
   }
-  if (chest.blueprint) blueprint = true;
   const s = snap();
   steps.push({
     index: -1,
     kind: 'chest',
     outcome: 'opened',
     hitsSpent: 0,
-    scrap: chest.scrap,
-    weaponTier: chestTier,
-    blueprint: chest.blueprint,
+    scrap: chestScrap,
+    weaponTier: chestWeaponTier,
+    lootboxKind: chestLootbox,
     weaponTierAfter: s.tier,
     weaponHitsAfter: s.hits,
   });
-  return { reachedChest: true, steps, collectedScrap, collectedWeapons, blueprint };
+  return { reachedChest: true, steps, collectedScrap, collectedWeapons, collectedLootboxes };
 }
 
 /** arsenals[i] — список тиров оружия на i-м столбце (линии). */
-export function simulateBattle(level: Level, arsenals: number[][], ctx: BattleCtx): BattleResult {
-  const lanes = level.lanes.map((lane, i) => simulateLane(lane, arsenals[i] ?? [], ctx));
+export function simulateBattle(level: Level, arsenals: number[][], _ctx?: BattleCtx): BattleResult {
+  const lanes = level.lanes.map((lane, i) => simulateLane(lane, arsenals[i] ?? []));
   return {
     level: level.number,
     passed: lanes.some((l) => l.reachedChest),
     lanes,
     totalScrap: lanes.reduce((a, l) => a + l.collectedScrap, 0),
     totalWeapons: lanes.flatMap((l) => l.collectedWeapons),
-    blueprints: lanes.reduce((a, l) => a + (l.blueprint ? 1 : 0), 0),
+    totalLootboxes: lanes.flatMap((l) => l.collectedLootboxes),
   };
 }

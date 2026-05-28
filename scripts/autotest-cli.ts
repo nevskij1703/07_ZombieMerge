@@ -46,7 +46,7 @@ const range = (label: string, from: number, to: number): void => {
 console.log('=== AUTOTEST REPORT ===');
 console.log(`Дошёл до уровня: ${rep.reachedLevel}/${rep.totalLevels} (${rep.finished ? 'FINISHED' : 'STUCK at L' + rep.stuckAt})`);
 console.log(`Всего произведено оружий: ${rep.totalProduced}`);
-console.log(`Чертежей: ${rep.totalBlueprints}`);
+console.log(`Лутбоксов выпало: ${rep.totalLootboxes}`);
 console.log('');
 console.log('Средняя доля линий, дошедших до сундука (по диапазонам):');
 range('early', 1, 10);

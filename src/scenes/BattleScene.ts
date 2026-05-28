@@ -715,11 +715,14 @@ export class BattleScene extends Phaser.Scene {
     this.add.text(cx, DESIGN_HEIGHT / 2 - 170, title, { fontFamily: 'monospace', fontSize: '32px', color: titleColor }).setOrigin(0.5).setDepth(102);
 
     const reached = r.lanes.filter((l) => l.reachedChest).length;
+    const lbMid = r.totalLootboxes.filter((k) => k === 'medium').length;
+    const lbElite = r.totalLootboxes.filter((k) => k === 'elite').length;
+    const lbLine = lbMid + lbElite > 0 ? `Лутбоксы: ${lbMid} ср. / ${lbElite} кр.` : 'Лутбоксы: —';
     const lines = [
       `Дошло бойцов: ${reached} / ${r.lanes.length}`,
       `Металлолом: +${r.totalScrap}`,
       `Оружие: +${r.totalWeapons.length}`,
-      `Чертежи: +${r.blueprints}`,
+      lbLine,
     ];
     this.add
       .text(cx, DESIGN_HEIGHT / 2 - 40, lines.join('\n'), { fontFamily: 'monospace', fontSize: '26px', color: '#dddddd', align: 'center', lineSpacing: 12 })

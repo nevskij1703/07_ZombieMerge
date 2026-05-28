@@ -342,7 +342,7 @@ export function initDevPanel(game: Phaser.Game): void {
     autoSummary.textContent = [
       `Уровней: ${rep.reachedLevel}/${rep.totalLevels}`,
       `Произведено оружий: ${rep.totalProduced}`,
-      `Чертежей: ${rep.totalBlueprints}`,
+      `Лутбоксов: ${rep.totalLootboxes}`,
       last
         ? `Финал: поле ${last.cols}×${last.rows}, Цех T${last.workshopTier}, макс на поле T${last.fieldMaxTier}`
         : '',

@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { TIER_COLORS, UI } from '../config/constants';
 import { getState } from '../core/storage';
+import { isLootboxCode, lootboxKindOfCode } from '../core/lootbox';
 
 export interface InventoryRect {
   x: number;
@@ -46,12 +47,16 @@ export class InventoryBar {
     const count = Math.min(inv.length, MAX_VISIBLE);
 
     for (let i = 0; i < count; i++) {
-      const tier = inv[i];
+      const v = inv[i];
       const x = startX + i * (size + gap) + size / 2;
-      const bg = this.scene.add.rectangle(x, y, size, size, TIER_COLORS[tier] ?? 0x888888).setOrigin(0.5);
-      bg.setStrokeStyle(2, 0x000000, 0.3);
+      const lbKind = lootboxKindOfCode(v);
+      const isLb = isLootboxCode(v);
+      const color = isLb ? (lbKind === 'elite' ? 0x9b59b6 : 0xd4a017) : TIER_COLORS[v] ?? 0x888888;
+      const bg = this.scene.add.rectangle(x, y, size, size, color).setOrigin(0.5);
+      bg.setStrokeStyle(2, isLb ? 0xffffff : 0x000000, isLb ? 0.6 : 0.3);
+      const label = isLb ? '📦' : String(v);
       const txt = this.scene.add
-        .text(x, y, String(tier), { fontFamily: 'monospace', fontSize: `${Math.round(size * 0.4)}px`, color: '#ffffff' })
+        .text(x, y, label, { fontFamily: 'monospace', fontSize: `${Math.round(size * (isLb ? 0.5 : 0.4))}px`, color: '#ffffff' })
         .setOrigin(0.5);
       txt.setStroke('#000000', 3);
       bg.setInteractive({ useHandCursor: true });

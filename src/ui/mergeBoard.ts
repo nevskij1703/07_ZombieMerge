@@ -1,14 +1,21 @@
 import Phaser from 'phaser';
-import type { FieldState, WeaponTier } from '../types';
+import type { FieldState, LootboxKind, WeaponTier } from '../types';
 import { TIER_COLORS, UI, COLORS } from '../config/constants';
 import { weaponName } from '../core/weapons';
 import { canMergeIndices, mergeInto, moveOrSwap } from '../core/merge';
+import { isLootboxCode, isWeaponCellValue, lootboxKindOfCode } from '../core/lootbox';
 
 export interface BoardCallbacks {
   /** Вызывается после любого изменения поля (персист + обновить HUD/кнопки). */
   onChange: () => void;
   /** Вызывается при успешном мердже (передаётся новый тир). */
   onMerge?: (tier: WeaponTier) => void;
+  /** Тап по клетке с лутбоксом. Получатель должен обновить state.field (открыть лутбокс)
+   *  и вернуть true, чтобы доска перерисовала плитки. */
+  onOpenLootbox?: (cellIndex: number, kind: LootboxKind) => boolean;
+  /** Drop оружия в зону мусорки. Получатель удаляет из state.field и возвращает true,
+   *  если удаление состоялось (для перерисовки + анимации). */
+  onTrash?: (cellIndex: number) => boolean;
 }
 
 export interface BoardRect {
@@ -36,6 +43,7 @@ export class MergeBoard {
   private field: FieldState;
   private rect: BoardRect;
   private readonly cb: BoardCallbacks;
+  private trashZone: BoardRect | null = null;
 
   private pitch = 0;
   private cellSize = 0;
@@ -62,6 +70,11 @@ export class MergeBoard {
     this.buildCells();
     this.rebuildTiles();
     this.attachInput();
+  }
+
+  /** Установить прямоугольник трэш-зоны. Drop оружия в эту область → cb.onTrash. */
+  setTrashZone(rect: BoardRect | null): void {
+    this.trashZone = rect;
   }
 
   /** Перепривязать к (возможно новому) полю и перерисовать — например после роста поля. */
@@ -147,19 +160,36 @@ export class MergeBoard {
 
     if (wasDragging && dragTile) {
       dragTile.setScale(1);
-      this.resolveDrop(from, this.pointerCell(pointer));
+      this.resolveDrop(from, this.pointerCell(pointer), pointer.worldX, pointer.worldY);
     } else {
       this.handleTap(from);
     }
   }
 
+  private isInTrashZone(x: number, y: number): boolean {
+    const z = this.trashZone;
+    if (!z) return false;
+    return x >= z.x && x <= z.x + z.w && y >= z.y && y <= z.y + z.h;
+  }
+
   // --- Логика слотов ---
 
   private handleTap(index: number): void {
-    const targetTier = this.field.cells[index];
+    const value = this.field.cells[index];
+
+    // Тап по лутбоксу — открыть его (без выделения/мерджа).
+    if (isLootboxCode(value)) {
+      this.clearSelection();
+      const kind = lootboxKindOfCode(value);
+      if (kind && this.cb.onOpenLootbox?.(index, kind)) {
+        this.rebuildTiles();
+        this.cb.onChange();
+      }
+      return;
+    }
 
     if (this.selectedIndex === null) {
-      if (targetTier != null) this.select(index);
+      if (value != null) this.select(index);
       return;
     }
     if (this.selectedIndex === index) {
@@ -168,20 +198,29 @@ export class MergeBoard {
     }
 
     const from = this.selectedIndex;
-    if (targetTier == null) {
+    if (value == null) {
       this.clearSelection();
       this.applyMove(from, index);
     } else if (canMergeIndices(this.field, from, index)) {
       this.clearSelection();
       this.applyMerge(from, index);
     } else {
-      // занято и не мерджится — просто перевыбираем
+      // занято и не мерджится (или лутбокс) — перевыбираем (если оружие).
       this.clearSelection();
-      this.select(index);
+      if (isWeaponCellValue(value)) this.select(index);
     }
   }
 
-  private resolveDrop(from: number, to: number): void {
+  private resolveDrop(from: number, to: number, worldX: number, worldY: number): void {
+    // Drop в зону мусорки — удалить (если разрешено).
+    if (to === -1 && this.isInTrashZone(worldX, worldY)) {
+      const v = this.field.cells[from];
+      if (isWeaponCellValue(v) && this.cb.onTrash?.(from)) {
+        this.rebuildTiles();
+        this.cb.onChange();
+        return;
+      }
+    }
     if (to === -1 || to === from) {
       this.rebuildTiles(); // вернуть плитку на место
       return;
@@ -266,9 +305,14 @@ export class MergeBoard {
     this.tileByIndex.forEach((t) => t.destroy());
     this.tileByIndex.clear();
     for (let i = 0; i < this.field.cells.length; i++) {
-      const tier = this.field.cells[i];
-      if (tier == null) continue;
-      this.tileByIndex.set(i, this.makeTile(i, tier));
+      const v = this.field.cells[i];
+      if (v == null) continue;
+      if (isLootboxCode(v)) {
+        const kind = lootboxKindOfCode(v);
+        if (kind) this.tileByIndex.set(i, this.makeLootboxTile(i, kind));
+      } else if (isWeaponCellValue(v)) {
+        this.tileByIndex.set(i, this.makeTile(i, v));
+      }
     }
   }
 
@@ -298,6 +342,33 @@ export class MergeBoard {
 
     const tile = this.scene.add.container(c.x, c.y, [bg, tierTxt, nameTxt]);
     tile.setData('bg', bg);
+    return tile;
+  }
+
+  /** Плитка-лутбокс. Отличается цветом и подписью; тапом превращается в оружие. */
+  private makeLootboxTile(index: number, kind: LootboxKind): Phaser.GameObjects.Container {
+    const c = this.centerOf(index);
+    const size = this.cellSize * 0.92;
+    const color = kind === 'elite' ? 0x9b59b6 : 0xd4a017; // фиолетовый / золото
+    const label = kind === 'elite' ? 'КРУТ' : 'СР.';
+
+    const bg = this.scene.add.rectangle(0, 0, size, size, color).setOrigin(0.5);
+    bg.setStrokeStyle(3, 0xffffff, 0.6);
+    const icon = this.scene.add
+      .text(0, -size * 0.14, '📦', { fontFamily: 'monospace', fontSize: `${Math.round(size * 0.36)}px` })
+      .setOrigin(0.5);
+    const lbl = this.scene.add
+      .text(0, size * 0.28, label, {
+        fontFamily: 'monospace',
+        fontSize: `${Math.round(size * 0.16)}px`,
+        color: '#ffffff',
+      })
+      .setOrigin(0.5);
+    lbl.setStroke('#000000', 3);
+
+    const tile = this.scene.add.container(c.x, c.y, [bg, icon, lbl]);
+    tile.setData('bg', bg);
+    tile.setData('lootbox', kind);
     return tile;
   }
 }

@@ -15,7 +15,9 @@ import { canMergeTier, nextTier } from './weapons';
 import { isFull } from './merge';
 import { generateLevel } from './levelGen';
 import { simulateBattle } from './battleSim';
-import { laneArsenals, applyBattleResult } from './progression';
+import { laneArsenals, applyBattleResult, bestWeaponTier } from './progression';
+import { isLootboxCode, isWeaponCellValue, lootboxKindOfCode, rollLootboxTier } from './lootbox';
+import { makeRng } from './rng';
 
 export interface LevelSample {
   level: number;
@@ -30,10 +32,8 @@ export interface LevelSample {
   inventorySize: number;
   scrapGained: number;
   weaponsLooted: number;
-  blueprints: number;
-  /** Сколько линий дошли до сундука / общее число линий в этом уровне. Метрика
-   *  «насколько игра тяжёлая»: чем меньше lanesReached/lanesTotal, тем чаще игрок видит
-   *  не-всеми-добежавший исход. ~70% — комфорт, ~50% — сложно, <30% — стенка. */
+  lootboxesLooted: number;
+  /** Сколько линий дошли до сундука / общее число линий в этом уровне. */
   lanesReached: number;
   lanesTotal: number;
 }
@@ -43,7 +43,7 @@ export interface AutotestReport {
   reachedLevel: number;
   totalLevels: number;
   totalProduced: number;
-  totalBlueprints: number;
+  totalLootboxes: number;
   samples: LevelSample[];
   stuckAt: number | null; // уровень, на котором завис (если finished=false)
 }
@@ -56,7 +56,7 @@ function computeMaxTierByColumn(field: FieldState): number[] {
     let max = 0;
     for (let r = 0; r < field.rows; r++) {
       const t = field.cells[r * field.cols + c];
-      if (t != null && t > max) max = t;
+      if (isWeaponCellValue(t) && t > max) max = t;
     }
     out[c] = max;
   }
@@ -65,7 +65,7 @@ function computeMaxTierByColumn(field: FieldState): number[] {
 
 function maxTierOnField(field: FieldState): number {
   let m = 0;
-  for (const t of field.cells) if (t != null && t > m) m = t;
+  for (const t of field.cells) if (isWeaponCellValue(t) && t > m) m = t;
   return m;
 }
 
@@ -131,18 +131,36 @@ function placeIntoWeakestColumn(field: FieldState, tier: WeaponTier): boolean {
 function drainInventoryToField(state: SaveState): boolean {
   let changed = false;
   while (state.inventory.length > 0 && !isFull(state.field)) {
-    const tier = state.inventory.shift()!;
-    placeIntoWeakestColumn(state.field, tier);
+    const item = state.inventory.shift()!;
+    placeIntoWeakestColumn(state.field, item);
     changed = true;
   }
   return changed;
 }
 
+/** Открыть все лутбоксы на поле (для greedy-автоигрока). Кладёт оружие на ту же клетку. */
+function openAllLootboxes(state: SaveState, rng: () => number): boolean {
+  let opened = false;
+  const ws = state.workshopTier;
+  const best = bestWeaponTier(state);
+  for (let i = 0; i < state.field.cells.length; i++) {
+    const c = state.field.cells[i];
+    if (!isLootboxCode(c)) continue;
+    const kind = lootboxKindOfCode(c);
+    if (!kind) continue;
+    const tier = rollLootboxTier(kind, ws, best, rng);
+    state.field.cells[i] = tier;
+    opened = true;
+  }
+  return opened;
+}
+
 /** Прогон фазы мерджа до тупика. Возвращает кол-во произведённых оружий. */
-function runMergePhase(state: SaveState): number {
+function runMergePhase(state: SaveState, openLootboxRng: () => number): number {
   let produced = 0;
   for (let safety = 0; safety < MERGE_SAFETY; safety++) {
     if (drainInventoryToField(state)) continue;
+    if (openAllLootboxes(state, openLootboxRng)) continue;
     if (mergeAnyPair(state.field)) continue;
 
     const cost = produceCost(state.workshopTier);
@@ -162,7 +180,9 @@ export function runAutotest(maxLevel = 50, maxAttemptsPerLevel = 50): AutotestRe
   const state = DEFAULT_STATE();
   const samples: LevelSample[] = [];
   let totalProduced = 0;
-  let totalBlueprints = 0;
+  let totalLootboxes = 0;
+  // Отдельный RNG для открытия лутбоксов (детерминированно по seed=кампания).
+  const lootRng = makeRng(0x5eedb000);
 
   for (let L = 1; L <= maxLevel; L++) {
     let attempts = 0;
@@ -178,19 +198,22 @@ export function runAutotest(maxLevel = 50, maxAttemptsPerLevel = 50): AutotestRe
           reachedLevel: L - 1,
           totalLevels: maxLevel,
           totalProduced,
-          totalBlueprints,
+          totalLootboxes,
           samples,
           stuckAt: L,
         };
       }
 
-      producedThisLevel += runMergePhase(state);
-      const lvl = generateLevel(state.level);
+      producedThisLevel += runMergePhase(state, lootRng);
+      const lvl = generateLevel(state.level, {
+        workshopTier: state.workshopTier,
+        bestTier: bestWeaponTier(state),
+      });
       const arsenals = laneArsenals(state.field);
-      const result = simulateBattle(lvl, arsenals, { workshopTier: state.workshopTier });
+      const result = simulateBattle(lvl, arsenals);
       lastResult = result;
       if (result.passed) break;
-      // Не прошли: применим частичные награды (металлолом по дороге) и снова мерджим.
+      // Не прошли: применим частичные награды и снова мерджим (вкл. открытие лутбоксов).
       applyBattleResult(state, result);
     }
 
@@ -209,13 +232,13 @@ export function runAutotest(maxLevel = 50, maxAttemptsPerLevel = 50): AutotestRe
       inventorySize: state.inventory.length,
       scrapGained: result.totalScrap,
       weaponsLooted: result.totalWeapons.length,
-      blueprints: result.blueprints,
+      lootboxesLooted: result.totalLootboxes.length,
       lanesReached,
       lanesTotal: result.lanes.length,
     };
     samples.push(sample);
     totalProduced += producedThisLevel;
-    totalBlueprints += result.blueprints;
+    totalLootboxes += result.totalLootboxes.length;
 
     applyBattleResult(state, result); // level++, рост поля, лут на поле/инвентарь
   }
@@ -225,7 +248,7 @@ export function runAutotest(maxLevel = 50, maxAttemptsPerLevel = 50): AutotestRe
     reachedLevel: maxLevel,
     totalLevels: maxLevel,
     totalProduced,
-    totalBlueprints,
+    totalLootboxes,
     samples,
     stuckAt: null,
   };

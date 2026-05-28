@@ -48,6 +48,11 @@ export class Button {
     this.label.setText(s);
   }
 
+  /** Сменить фон (для подсветки активного состояния в группах кнопок-табов). */
+  setBg(color: number): void {
+    this.bgRect.setFillStyle(color);
+  }
+
   setEnabled(b: boolean): void {
     this.enabled = b;
     this.bgRect.setFillStyle(b ? this.baseBg : UI.btnDisabled);

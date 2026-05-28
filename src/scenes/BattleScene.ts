@@ -29,9 +29,10 @@ export class BattleScene extends Phaser.Scene {
   private yChest = 190;
   private yBottom = 1060;
   private laneWidth = 0;
-  private readonly MOVE = 220;
-  private readonly SCRAP = 140;
-  private readonly CHEST = 420;
+  // Базовый темп боя (timeScale=1). Раньше был в 2× быстрее — то что игроки увидят на ×4.
+  private readonly MOVE = 440;
+  private readonly SCRAP = 280;
+  private readonly CHEST = 840;
 
   private fighters: Phaser.GameObjects.Container[] = [];
   private fighterTierTexts: Phaser.GameObjects.Text[] = [];
@@ -44,7 +45,7 @@ export class BattleScene extends Phaser.Scene {
   private obHpTexts: (Phaser.GameObjects.Text | null)[][] = [];
   private lanesDone = 0;
   private resultShown = false;
-  private speed = 1;
+  private speedButtons: Array<{ btn: Button; factor: number }> = [];
 
   constructor() {
     super(SceneKey.Battle);
@@ -55,7 +56,7 @@ export class BattleScene extends Phaser.Scene {
     this.result = simulateBattle(data.level, data.arsenals, { workshopTier: data.workshopTier });
     this.lanesDone = 0;
     this.resultShown = false;
-    this.speed = 1;
+    this.speedButtons = [];
     this.fighters = [];
     this.fighterTierTexts = [];
     this.fighterHitsTexts = [];
@@ -83,10 +84,36 @@ export class BattleScene extends Phaser.Scene {
 
     for (let li = 0; li < cols; li++) this.buildLane(li, data.arsenals[li] ?? []);
 
-    // Управление.
-    new Button(this, { x: 150, y: 1210, width: 240, height: 70, label: 'СКИП', fontSize: 26, bg: 0x555a66, onClick: () => this.showResult() });
-    let speedBtn: Button;
-    speedBtn = new Button(this, { x: DESIGN_WIDTH - 150, y: 1210, width: 240, height: 70, label: '2×', fontSize: 26, bg: 0x3a6ea5, onClick: () => this.toggleSpeed(speedBtn) });
+    // Управление: СКИП + переключатель скорости (×0.25 / ×1 / ×4).
+    new Button(this, {
+      x: 110,
+      y: 1210,
+      width: 180,
+      height: 70,
+      label: 'СКИП',
+      fontSize: 24,
+      bg: 0x555a66,
+      onClick: () => this.showResult(),
+    });
+    const speeds: Array<{ factor: number; label: string }> = [
+      { factor: 0.25, label: '×0.25' },
+      { factor: 1, label: '×1' },
+      { factor: 4, label: '×4' },
+    ];
+    speeds.forEach((s, i) => {
+      const btn = new Button(this, {
+        x: 290 + i * 130,
+        y: 1210,
+        width: 120,
+        height: 70,
+        label: s.label,
+        fontSize: 22,
+        bg: 0x3a414d,
+        onClick: () => this.setSpeed(s.factor),
+      });
+      this.speedButtons.push({ btn, factor: s.factor });
+    });
+    this.setSpeed(1);
 
     for (let li = 0; li < cols; li++) this.playLane(li);
   }
@@ -168,7 +195,7 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private fightTime(hits: number): number {
-    return Phaser.Math.Clamp(hits * 55, 120, 1400);
+    return Phaser.Math.Clamp(hits * 110, 240, 2800);
   }
 
   private playLane(li: number): void {
@@ -331,11 +358,13 @@ export class BattleScene extends Phaser.Scene {
     this.tweens.add({ targets: t, y: y - 40, alpha: 0, duration: 700, onComplete: () => t.destroy() });
   }
 
-  private toggleSpeed(btn: Button): void {
-    this.speed = this.speed === 1 ? 2 : 1;
-    this.tweens.timeScale = this.speed;
-    this.time.timeScale = this.speed;
-    btn.setLabel(this.speed === 1 ? '2×' : '1×');
+  /** Установить скорость анимации боя; подсветить активную кнопку. */
+  private setSpeed(factor: number): void {
+    this.tweens.timeScale = factor;
+    this.time.timeScale = factor;
+    for (const sb of this.speedButtons) {
+      sb.btn.setBg(sb.factor === factor ? 0x2e7d32 : 0x3a414d);
+    }
   }
 
   private showResult(): void {

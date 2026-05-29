@@ -1,31 +1,11 @@
-// Headless-прогон autotest из CLI: npx tsx scripts/autotest-cli.ts
-// Заглушает window/localStorage (autotest и DEFAULT_STATE не зависят от LS, но balanceRuntime
-// может попытаться прочитать override — там есть safe guards).
+// DEEP балансовая проверка — полный прогон 50 уровней с разбивкой по диапазонам.
+// По умолчанию НЕ запускать (см. правила в CLAUDE.md). Использовать только когда нужен
+// полный аудит или явный запрос пользователя «прогон полностью».
+// Для быстрой проверки — `scripts/balance-quick.ts` (L5/L25/L50, ~5 строк).
 //
-// Назначение: быстрая проверка баланса после правок (без открытия dev-панели).
+// Запуск: `npx tsx scripts/balance-deep.ts`
 
-if (typeof globalThis.localStorage === 'undefined') {
-  // Минимальный shim — нам ничего из LS не нужно, balanceRuntime просто видит «override = нет».
-  const store: Record<string, string> = {};
-  // @ts-expect-error глобальный shim для node
-  globalThis.localStorage = {
-    getItem: (k: string) => (k in store ? store[k] : null),
-    setItem: (k: string, v: string) => {
-      store[k] = String(v);
-    },
-    removeItem: (k: string) => {
-      delete store[k];
-    },
-    clear: () => {
-      for (const k of Object.keys(store)) delete store[k];
-    },
-    key: (i: number) => Object.keys(store)[i] ?? null,
-    get length(): number {
-      return Object.keys(store).length;
-    },
-  };
-}
-
+import './_shim';
 import { runAutotest } from '../src/core/autotest';
 import { generateLevel } from '../src/core/levelGen';
 

@@ -102,7 +102,7 @@ type LaneEvent = LungeEvent | ChestEvent | StuckEvent;
 
 type SceneMode = 'base' | 'transition' | 'battle' | 'returning' | 'showing_result';
 
-export class BaseScene extends Phaser.Scene {
+export class WorldScene extends Phaser.Scene {
   // === Base UI references ===
   private hud!: Hud;
   private board!: MergeBoard;
@@ -147,7 +147,7 @@ export class BaseScene extends Phaser.Scene {
   private readonly MIN_WALK = 220;
 
   constructor() {
-    super(SceneKey.Base);
+    super(SceneKey.World);
   }
 
   // ============================== Lifecycle ====================================

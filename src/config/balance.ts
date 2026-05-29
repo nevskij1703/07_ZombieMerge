@@ -1,6 +1,38 @@
 // ЕДИНЫЙ источник правды по балансу. Крутим ЧИСЛА здесь, логику в core/* не трогаем.
 // Редактируется на лету из дев-панели (вкладка Баланс) через override. См. docs/BALANCE.md.
-// Значения — стартовые/отладочные, доводятся на этапе 10.
+//
+// ═════════════════════════════════════════════════════════════════════════════
+// PRIMARY TUNING KNOBS  ──  МЕНЯЙ ПЕРВЫМ ДЕЛОМ ПРИ ЛЮБОМ «ТЮНЕ БАЛАНСА»
+// ═════════════════════════════════════════════════════════════════════════════
+// Полный индекс параметров — `docs/PROJECT_MAP.md` §4. Ниже — самые горячие:
+//
+// DIFFICULTY (как быстро игра становится сложнее)
+//   • levelGen.zombieCountPerLevel      = 0.45   зомби/уровень
+//   • levelGen.zombieTierGrowthPerLevel = 0.18   центр гауссиана тиров +/lvl
+//   • levelGen.zombieTierSpread         = 1.5    ширина распределения
+//   • levelGen.zombieTierWildcardShare  = 0.05   доля равномерки (high-tier surprises)
+//
+// ECONOMY (лом → производство)
+//   • economy.startScrap                = 30
+//   • levelGen.scrapPerPile             = 9
+//   • levelGen.scrapPilesMin/Max        = 2/3
+//   • chest.rewardWeights               = {scrap:0.15, weapon:0.20, lootbox:0.65}
+//   • chest.scrapMin/Max                = 14/32
+//
+// PLAYER PROGRESSION (как сильно растёт игрок)
+//   • workshop.upgradeAtLevels          = [4, 12, 22]
+//   • weapons[N].hits                   = N + 3 (линейный)
+//   • chest.chestWeaponOffsetMin/Max    = -2/+2  (тир оружия из сундука vs workshop)
+//   • lootbox.eliteOffsetMin/Max        = -2/0   (elite-лутбокс vs player best)
+//
+// ZOMBIE HP ANCHORS (piecewise linear между анкорами)
+//   • zombies[1].hp = 5  (anchor: weak)
+//   • zombies[6].hp = 25 (anchor: medium)
+//   • zombies[12].hp = 150 (anchor: strong)
+//
+// Проверка после тюна: `npx tsx scripts/balance-quick.ts` (L5/L25/L50, 5 строк).
+// Глубоко: `npx tsx scripts/balance-deep.ts`. НЕ запускай без явной просьбы.
+// ═════════════════════════════════════════════════════════════════════════════
 
 export interface WeaponDef {
   name: string;

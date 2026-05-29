@@ -24,6 +24,6 @@ export class BootScene extends Phaser.Scene {
       }
     }
     load();
-    this.scene.start(SceneKey.Base);
+    this.scene.start(SceneKey.World);
   }
 }

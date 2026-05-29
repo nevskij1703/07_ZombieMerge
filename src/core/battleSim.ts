@@ -120,11 +120,21 @@ function simulateLane(lane: Lane, tiers: number[]): LaneResult {
     if (ob.kind === 'crate') {
       gainedScrap = ob.scrap;
       collectedScrap += gainedScrap;
-      if (ob.weaponTier !== undefined) {
-        gainedTier = ob.weaponTier;
-        collectedWeapons.push(gainedTier);
-        // Подобранное в пути оружие сразу подключается к арсеналу этой линии.
-        ars.push({ tier: gainedTier, hits: getWeapon(gainedTier).hits });
+      if (ob.givesWeapon) {
+        // По тз: коробка ОБНОВЛЯЕТ ресурс самого крутого оружия в арсенале линии
+        // (даже если у него hits=0). НЕ выдаёт новое оружие → в collectedWeapons не пишем.
+        let bestIdx = -1;
+        let bestTier = 0;
+        for (let k = 0; k < ars.length; k++) {
+          if (ars[k].tier > bestTier) {
+            bestTier = ars[k].tier;
+            bestIdx = k;
+          }
+        }
+        if (bestIdx >= 0) {
+          ars[bestIdx].hits = getWeapon(ars[bestIdx].tier).hits;
+          gainedTier = ars[bestIdx].tier; // для LaneStep (UI/инфа что было обновлено)
+        }
       }
     }
     const s = snap();

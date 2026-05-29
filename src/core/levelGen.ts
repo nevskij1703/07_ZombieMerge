@@ -107,13 +107,7 @@ function genLane(
   // Per-lane: с шансом crateLaneChance — ровно ОДНА коробка, иначе никакой.
   if (rng() < b.levelGen.crateLaneChance) {
     const pos = rint(rng, 0, obstacles.length);
-    const hasWeapon = rng() < b.levelGen.crateWeaponChance;
-    // Тир оружия в коробке = best + offset (по тз — НИЖЕ лучшего на 1-2 разряда).
-    let crateWeaponTier: WeaponTier | undefined;
-    if (hasWeapon) {
-      const off = rint(rng, b.levelGen.crateWeaponOffsetMin, b.levelGen.crateWeaponOffsetMax);
-      crateWeaponTier = clampTier(playerCtx.bestTier + off);
-    }
+    const givesWeapon = rng() < b.levelGen.crateWeaponChance;
     // По тз: коробка имеет HP в ~2× HP сильнейшего зомби на уровне (динамически).
     const strongestHp = Math.max(
       b.zombies.weak.hp,
@@ -125,7 +119,7 @@ function genLane(
       kind: 'crate',
       hp: crateHp,
       scrap: b.levelGen.scrapPerPile,
-      weaponTier: crateWeaponTier,
+      givesWeapon,
     });
   }
 

@@ -27,6 +27,22 @@ if (typeof globalThis.localStorage === 'undefined') {
 }
 
 import { runAutotest } from '../src/core/autotest';
+import { generateLevel } from '../src/core/levelGen';
+
+// Дамп первых 5 уровней — какие зомби генерятся (диагностика баланса тиров).
+// Полезно при тюнинге распределения; в продакшне не выполняется.
+console.log('=== УРОВНИ 1-5: состав зомби (тиры) ===');
+for (let L = 1; L <= 5; L++) {
+  const lvl = generateLevel(L, { workshopTier: 1, bestTier: 1 });
+  const laneSummaries = lvl.lanes.map((ln, i) => {
+    const zombies = ln.obstacles.filter((o) => o.kind === 'zombie');
+    const tiers = zombies.map((z) => z.zombieTier ?? 0);
+    const totalHp = zombies.reduce((a, z) => a + z.hp, 0);
+    return `L${i + 1}: [${tiers.join(',')}] HP=${totalHp}`;
+  });
+  console.log(`Lvl ${L}: ${laneSummaries.join('  ')}`);
+}
+console.log('');
 
 const rep = runAutotest(50);
 

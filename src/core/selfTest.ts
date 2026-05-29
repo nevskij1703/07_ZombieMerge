@@ -82,9 +82,9 @@ export function levelSanityTest(): void {
     prevSize = size;
   }
 
-  // На 1-м уровне только слабые зомби (medium/strong появляются позже).
-  const onlyWeak = generateLevel(1).lanes.every((ln) =>
-    ln.obstacles.every((o) => o.kind !== 'zombie' || o.zombieKind === 'weak'),
+  // На 1-м уровне максимальный тир зомби — zombieMinTypesL1 (по умолч. 3 типа: T1-T3).
+  const onlyEarlyTiers = generateLevel(1).lanes.every((ln) =>
+    ln.obstacles.every((o) => o.kind !== 'zombie' || (o.zombieTier ?? 1) <= 3),
   );
-  assert(onlyWeak, 'lvl1 only weak zombies');
+  assert(onlyEarlyTiers, 'lvl1: zombies only T1-T3');
 }

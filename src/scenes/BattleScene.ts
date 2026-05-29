@@ -14,11 +14,27 @@ interface BattleData {
   workshopTier: number;
 }
 
-const ZKIND_COLOR: Record<string, number> = {
-  weak: 0x6b8e23,
-  medium: 0xc77b1e,
-  strong: 0x9b2222,
-};
+// 12-цветовой градиент тиров зомби (T1=оливковый → T6=оранжевый → T12=тёмно-красный).
+// Анкоры подобраны под старые weak/medium/strong цвета; между ними плавный переход.
+const ZOMBIE_TIER_COLORS: number[] = [
+  0x333333, // index 0 — заглушка
+  0x6b8e23, // T1 — оливковый (бывший weak)
+  0x7d931e, // T2
+  0x90981e, // T3
+  0xa68f1e, // T4
+  0xb6851e, // T5
+  0xc77b1e, // T6 — оранжевый (бывший medium)
+  0xbe6a1e, // T7
+  0xb55a1e, // T8
+  0xab4a1e, // T9
+  0xa53a22, // T10
+  0xa02e22, // T11
+  0x9b2222, // T12 — тёмно-красный (бывший strong)
+];
+
+function zombieColor(tier: number): number {
+  return ZOMBIE_TIER_COLORS[Math.max(1, Math.min(12, tier))] ?? ZOMBIE_TIER_COLORS[1];
+}
 
 // === Lunge-плейбэк ===========================================================
 // Один удар оружием = один «рывок» бойца вперёд. Если удар убивает цель и есть
@@ -196,7 +212,7 @@ export class BattleScene extends Phaser.Scene {
       const ob = obstacles[i];
       const y = this.obstacleY(li, i);
       if (ob.kind === 'zombie') {
-        tokens[i] = this.add.circle(x, y, tokenSize / 2, ZKIND_COLOR[ob.zombieKind ?? 'weak']).setStrokeStyle(2, 0x000000, 0.4);
+        tokens[i] = this.add.circle(x, y, tokenSize / 2, zombieColor(ob.zombieTier ?? 1)).setStrokeStyle(2, 0x000000, 0.4);
       } else if (ob.kind === 'crate') {
         tokens[i] = this.add.rectangle(x, y, tokenSize, tokenSize, 0x8b5a2b).setStrokeStyle(2, 0x000000, 0.4);
       } else {

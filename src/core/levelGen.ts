@@ -1,7 +1,7 @@
 // Детерминированная генерация уровня из баланса + номера уровня + контекста игрока.
 // Один и тот же (level, workshopTier, bestTier) всегда даёт одинаковую раскладку.
 
-import type { Level, Lane, Obstacle, WeaponTier, ZombieKind, ChestDef, LootboxKind, ChestRewardKind } from '../types';
+import type { Level, Lane, Obstacle, WeaponTier, ChestDef, LootboxKind, ChestRewardKind } from '../types';
 import type { Balance } from '../config/balance';
 import { getBalance } from './balanceRuntime';
 import { makeRng, rint } from './rng';
@@ -67,7 +67,99 @@ export function generateLevel(level: number, ctx?: LevelGenContext): Level {
     const laneZombies = Math.max(1, Math.round(baseZombieCount * factor));
     lanes.push(genLane(b, rng, level, laneZombies, playerCtx));
   }
+  // Гарантия из тз: на L1 минимум N типов зомби (по дефолту 3) должны быть видны.
+  // Если рандом не дал нужное разнообразие — досвопаем «дубликаты» в недостающие тиры.
+  if (level === 1) {
+    enforceMinTypes(lanes, b, level);
+  }
   return { number: level, cols, rows, roadLength, lanes };
+}
+
+/** Гарантируем, что в уровне видны минимум N разных тиров зомби (по тз для L1 = 3).
+ *  Если не хватает — заменяем «дубликаты» на недостающие тиры. */
+function enforceMinTypes(lanes: Lane[], b: Balance, level: number): void {
+  const minTypes = b.levelGen.zombieMinTypesL1 ?? 3;
+  const tierMax = maxZombieTierForLevel(b, level);
+  const target = Math.min(minTypes, tierMax);
+
+  const present = new Set<number>();
+  const collectPresent = (): void => {
+    present.clear();
+    for (const lane of lanes) {
+      for (const ob of lane.obstacles) {
+        if (ob.kind === 'zombie' && ob.zombieTier !== undefined) present.add(ob.zombieTier);
+      }
+    }
+  };
+  collectPresent();
+
+  for (let t = 1; t <= target; t++) {
+    if (present.has(t)) continue;
+    // Ищем «дубликат» (тир, представленный более 1 раза) для замены — чтобы не убить другой тип.
+    const counts = new Map<number, number>();
+    for (const lane of lanes) {
+      for (const ob of lane.obstacles) {
+        if (ob.kind === 'zombie' && ob.zombieTier !== undefined) {
+          counts.set(ob.zombieTier, (counts.get(ob.zombieTier) ?? 0) + 1);
+        }
+      }
+    }
+    let swapped = false;
+    for (const lane of lanes) {
+      for (const ob of lane.obstacles) {
+        if (ob.kind !== 'zombie' || ob.zombieTier === undefined) continue;
+        if ((counts.get(ob.zombieTier) ?? 0) > 1) {
+          ob.zombieTier = t;
+          ob.hp = b.zombies[t]?.hp ?? 1;
+          swapped = true;
+          break;
+        }
+      }
+      if (swapped) break;
+    }
+    if (swapped) collectPresent();
+    // Если зомби недостаточно (нет дубликата) — просто пропускаем недостающий тир.
+  }
+}
+
+/** Максимальный тир зомби, доступный на этом уровне (по тз: L1=3, L5+=12, плавный рост).
+ *  Округляем ВНИЗ — чтобы средние уровни не вылетали слишком жёсткими тирами. */
+function maxZombieTierForLevel(b: Balance, level: number): number {
+  const minTypes = b.levelGen.zombieMinTypesL1 ?? 3;
+  const allFrom = b.levelGen.zombieAllTypesFromLevel ?? 5;
+  if (level <= 1) return Math.min(12, minTypes);
+  if (level >= allFrom) return 12;
+  const span = 12 - minTypes;
+  const grown = minTypes + Math.floor(((level - 1) * span) / (allFrom - 1));
+  return Math.min(12, Math.max(minTypes, grown));
+}
+
+/** Сэмплирует тир одного зомби по уровню. На L1 — равномерное распределение по T1-T3
+ *  (гарантирует, что все доступные тиры реально видны игроку). С L2+ — гауссиан вокруг
+ *  «центра» (растёт с level) + лёгкий wildcard. */
+function sampleZombieTier(b: Balance, rng: () => number, level: number): number {
+  const tierMax = maxZombieTierForLevel(b, level);
+  if (level <= 1) {
+    return 1 + Math.floor(rng() * tierMax);
+  }
+  const center = Math.min(12, 1 + (level - 1) * (b.levelGen.zombieTierGrowthPerLevel ?? 0.3));
+  const spread = Math.max(0.5, b.levelGen.zombieTierSpread ?? 3);
+  const wildcard = Math.max(0, Math.min(1, b.levelGen.zombieTierWildcardShare ?? 0.3));
+
+  const weights: number[] = [];
+  let total = 0;
+  for (let t = 1; t <= tierMax; t++) {
+    const gauss = Math.exp(-(((t - center) / spread) ** 2));
+    const w = (1 - wildcard) * gauss + wildcard / tierMax;
+    weights.push(w);
+    total += w;
+  }
+  let r = rng() * total;
+  for (let t = 1; t <= tierMax; t++) {
+    r -= weights[t - 1];
+    if (r <= 0) return t;
+  }
+  return tierMax;
 }
 
 function genLane(
@@ -77,44 +169,37 @@ function genLane(
   zombieCount: number,
   playerCtx: LevelGenContext,
 ): Lane {
-  let medium = 0;
-  let strong = 0;
-  if (level >= b.levelGen.mediumFromLevel) {
-    const ratio = Math.min(b.levelGen.mediumCap, b.levelGen.mediumGrowthPerLevel * (level - b.levelGen.mediumFromLevel + 1));
-    medium = Math.round(zombieCount * ratio);
+  // Сэмплируем тир для каждого зомби в линии.
+  const tiers: number[] = [];
+  for (let i = 0; i < zombieCount; i++) {
+    tiers.push(sampleZombieTier(b, rng, level));
   }
-  if (level >= b.levelGen.strongFromLevel) {
-    const ratio = Math.min(b.levelGen.strongCap, b.levelGen.strongGrowthPerLevel * (level - b.levelGen.strongFromLevel + 1));
-    strong = Math.round(zombieCount * ratio);
-  }
-  const weak = Math.max(0, zombieCount - medium - strong);
 
-  // Sort-with-jitter: размытое распределение. Без jitter — weak строго в начале, strong в
-  // конце; с jitter>0 границы между типами «дышат» (по тз — блендинг, не жёсткие стены).
+  // Sort-with-jitter: лёгкие в начале, тяжёлые в конце, но границы «дышат».
+  tiers.sort((a, c) => a - c);
   const jitter = b.levelGen.zombieOrderJitter ?? 0;
-  const lineup: ZombieKind[] = [];
-  for (let i = 0; i < weak; i++) lineup.push('weak');
-  for (let i = 0; i < medium; i++) lineup.push('medium');
-  for (let i = 0; i < strong; i++) lineup.push('strong');
-  const positioned = lineup.map((k, i) => ({ kind: k, pos: i + (jitter > 0 ? (rng() - 0.5) * 2 * jitter : 0) }));
-  positioned.sort((a, b) => a.pos - b.pos);
+  const positioned = tiers.map((tier, i) => ({
+    tier,
+    pos: i + (jitter > 0 ? (rng() - 0.5) * 2 * jitter : 0),
+  }));
+  positioned.sort((a, c) => a.pos - c.pos);
 
   const obstacles: Obstacle[] = [];
+  let maxZombieHpInLane = 0;
   for (const item of positioned) {
-    obstacles.push({ kind: 'zombie', zombieKind: item.kind, hp: b.zombies[item.kind].hp, scrap: 0 });
+    const def = b.zombies[item.tier];
+    const hp = def?.hp ?? 1;
+    if (hp > maxZombieHpInLane) maxZombieHpInLane = hp;
+    obstacles.push({ kind: 'zombie', zombieTier: item.tier, hp, scrap: 0 });
   }
 
   // Per-lane: с шансом crateLaneChance — ровно ОДНА коробка, иначе никакой.
   if (rng() < b.levelGen.crateLaneChance) {
     const pos = rint(rng, 0, obstacles.length);
     const givesWeapon = rng() < b.levelGen.crateWeaponChance;
-    // По тз: коробка имеет HP в ~2× HP сильнейшего зомби на уровне (динамически).
-    const strongestHp = Math.max(
-      b.zombies.weak.hp,
-      medium > 0 ? b.zombies.medium.hp : 0,
-      strong > 0 ? b.zombies.strong.hp : 0,
-    );
-    const crateHp = Math.max(1, Math.round(strongestHp * (b.levelGen.crateHpMultiplier ?? 2)));
+    // По тз: коробка имеет HP в ~2× HP сильнейшего зомби В ЭТОЙ ЛИНИИ (динамически).
+    const refHp = maxZombieHpInLane > 0 ? maxZombieHpInLane : (b.zombies[1]?.hp ?? 1);
+    const crateHp = Math.max(1, Math.round(refHp * (b.levelGen.crateHpMultiplier ?? 2)));
     obstacles.splice(pos, 0, {
       kind: 'crate',
       hp: crateHp,

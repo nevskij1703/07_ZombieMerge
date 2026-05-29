@@ -3,8 +3,10 @@
 /** Тир оружия (1..N). В MVP до 12. Просто число — для гибкости при расширении до 50-100. */
 export type WeaponTier = number;
 
-/** Типы зомби в MVP. */
-export type ZombieKind = 'weak' | 'medium' | 'strong';
+/** Тир зомби (1..N). Аналогично оружию: 1 — самый слабый, 12 — самый мощный. По тз:
+ *  T1=5HP (как старый weak), T6=25HP (как старый medium), T12=150HP (как старый strong),
+ *  промежуточные — равномерно. */
+export type ZombieTier = number;
 
 /** Типы лутбоксов из сундуков. medium — около произв. тира, elite — около лучшего у игрока. */
 export type LootboxKind = 'medium' | 'elite';
@@ -51,7 +53,7 @@ export type ObstacleKind = 'zombie' | 'crate' | 'scrap';
 export interface Obstacle {
   kind: ObstacleKind;
   hp: number; // hp зомби/ящика; 0 для кучи лома
-  zombieKind?: ZombieKind;
+  zombieTier?: ZombieTier;
   scrap: number; // сколько лома даёт (куча или лут из ящика)
   /** Если true — при поломке коробки боец получает ОБНОВЛЕНИЕ РЕСУРСА (hits → стартовое)
    *  для самого крутого оружия в арсенале своей линии. НЕ новый ствол. (Если false — только

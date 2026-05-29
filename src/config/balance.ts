@@ -2,8 +2,6 @@
 // Редактируется на лету из дев-панели (вкладка Баланс) через override. См. docs/BALANCE.md.
 // Значения — стартовые/отладочные, доводятся на этапе 10.
 
-import type { ZombieKind } from '../types';
-
 export interface WeaponDef {
   name: string;
   /** Урон за один удар/выстрел (скрыт от игрока). */
@@ -57,9 +55,17 @@ export interface LevelGenConfig {
   roadLengthPerLevel: number;
   baseZombieCount: number;
   zombieCountPerLevel: number;
-  /** С какого уровня в составе появляются средние / сильные зомби. */
-  mediumFromLevel: number;
-  strongFromLevel: number;
+  /** Сколько разных типов зомби минимум доступно на L1 (по тз — 3). */
+  zombieMinTypesL1: number;
+  /** С какого уровня доступны ВСЕ 12 тиров (по тз — L5). До этого окно растёт. */
+  zombieAllTypesFromLevel: number;
+  /** Как быстро «центральный» тир сдвигается вверх по уровням (для распределения). */
+  zombieTierGrowthPerLevel: number;
+  /** Гауссова ширина распределения вокруг центрального тира. */
+  zombieTierSpread: number;
+  /** Доля «равномерной» примеси к гауссиану — гарантирует, что любой доступный тир
+   *  имеет ненулевую вероятность. 0 = строго гауссиан. 1 = чистая равномерка. */
+  zombieTierWildcardShare: number;
   /** Вероятность (0..1) что ДАННАЯ линия получит ОДНУ коробку. Применяется per-lane:
    *  rng()<crateLaneChance → линия имеет 1 коробку, иначе — ноль. (Раньше было per-obstacle
    *  и плодило слишком много коробок; коробки теперь редкое сильное событие.) */
@@ -80,17 +86,11 @@ export interface LevelGenConfig {
    *  быть от 60% до 140% базового зомби-бюджета (player не может стабильно угадать,
    *  куда ставить топовое оружие). */
   laneDifficultySpread: number;
-  /** Сила «перемешивания» зомби по типам в линии (sort with jitter):
-   *  0 = чётко отсортировано (weak→medium→strong, как было).
-   *  3-4 = заметное размытие границ (по тз: блендинг типов).
+  /** Сила «перемешивания» зомби по тирам в линии (sort with jitter):
+   *  0 = чётко отсортировано (от слабых к сильным).
+   *  3-4 = заметное размытие границ (тиры мягко чередуются).
    *  Больше = почти случайный порядок. */
   zombieOrderJitter: number;
-  /** Доля strong-зомби — линейный рост по уровню (после strongFromLevel), с потолком. */
-  strongCap: number;
-  strongGrowthPerLevel: number;
-  /** Доля medium-зомби — линейный рост, потолок. */
-  mediumCap: number;
-  mediumGrowthPerLevel: number;
 }
 
 export interface Balance {
@@ -110,7 +110,8 @@ export interface Balance {
   field: {
     steps: FieldSizeStep[];
   };
-  zombies: Record<ZombieKind, ZombieDef>;
+  /** 12 тиров зомби. По тз: T1=5, T6=25, T12=150 — анкоры. Промежуточные piecewise-linear. */
+  zombies: Record<number, ZombieDef>;
   levelGen: LevelGenConfig;
   chest: ChestReward;
   lootbox: LootboxBalance;
@@ -173,12 +174,22 @@ export const balance: Balance = {
     ],
   },
 
-  // Спред по HP в ~5-6× между типами (по тз — ×5-10): strong получается «боссовый»,
-  // его сложно убить без топовых оружий, поэтому таких зомби должно быть мало.
+  // 12 тиров зомби (как у оружий). По тз: анкоры T1=5, T6=25, T12=150 — это бывшие
+  // weak/medium/strong. Промежуточные — piecewise linear, равномерный рост в каждом сегменте.
+  // T1-T6: +4 HP/тир. T6-T12: ~+21 HP/тир (округлено для красивых чисел).
   zombies: {
-    weak: { hp: 5 },
-    medium: { hp: 25 },
-    strong: { hp: 150 },
+    1: { hp: 5 },
+    2: { hp: 9 },
+    3: { hp: 13 },
+    4: { hp: 17 },
+    5: { hp: 21 },
+    6: { hp: 25 },
+    7: { hp: 45 },
+    8: { hp: 65 },
+    9: { hp: 90 },
+    10: { hp: 110 },
+    11: { hp: 130 },
+    12: { hp: 150 },
   },
 
   levelGen: {
@@ -187,11 +198,20 @@ export const balance: Balance = {
     // Цель: ~50-60% линий дошли до сундука в среднем (часть валится, но прогрессия до L50
     // проходима). Сложность держит низкий ресурс оружий (T1=4 ... T12=15) и редкие коробки.
     // См. scripts/autotest-cli.ts.
-    baseZombieCount: 3,
-    // Рост зомби умеренный — основной драйвер сложности теперь HP-спред ×5-6, а не количество.
-    zombieCountPerLevel: 0.85,
-    mediumFromLevel: 6,
-    strongFromLevel: 16,
+    // С 12-тирной системой основная сложность идёт от роста ТИРОВ (HP). Количество зомби
+    // держим скромным — иначе мердж-окно (особенно 2x2 на L1-L3) не успевает за HP-инфляцией.
+    // baseZombieCount=2 чтоб L1-L3 (поле 2x2) не уходили в death-spiral.
+    baseZombieCount: 2,
+    zombieCountPerLevel: 0.45,
+    // Распределение 12 тиров зомби по уровням (по тз):
+    //   • L1: минимум 3 типа (T1-T3 доступны).
+    //   • L5+: все 12 тиров могут спавниться.
+    //   • Распределение взвешенное (гауссиан + wildcard-floor).
+    zombieMinTypesL1: 3,
+    zombieAllTypesFromLevel: 5,
+    zombieTierGrowthPerLevel: 0.18, // насколько вырастает «центральный» тир за уровень
+    zombieTierSpread: 1.5, // ширина гауссиана вокруг центра (узкая — большинство зомби близ центра)
+    zombieTierWildcardShare: 0.05, // лёгкая примесь равномерки — гарантирует «все 12 могут быть» по тз
     // ПЕРЕИМЕНОВАНИЕ И СЕМАНТИКА: per-lane (вместо per-obstacle). Половина линий получит ОДНУ
     // коробку, остальные — ноль. Если в локальном override был старый ключ crateChance, он будет
     // проигнорирован (semantically incompatible).
@@ -208,15 +228,9 @@ export const balance: Balance = {
     scrapPerPile: 9,
     // Линии в одном уровне теперь разной нагрузки: множитель в [0.6, 1.4]. Меняется с уровнем (seed).
     laneDifficultySpread: 0.4,
-    // Размытие границ между типами зомби в линии. ±3 позиции — заметный блендинг,
-    // не «жёсткая стена» weak/medium/strong, как было.
+    // Размытие границ между тирами зомби в линии. ±3 позиции — заметный блендинг,
+    // тиры мягко чередуются вместо «жёсткой стены».
     zombieOrderJitter: 3,
-    // Strong — редкий (×6 HP medium → cap 0.08 = не больше 8% линии = «боссы»).
-    strongCap: 0.08,
-    strongGrowthPerLevel: 0.02,
-    // Medium — заметная часть линии, но не доминирующая (HP ×5 weak делает их и так непростыми).
-    mediumCap: 0.4,
-    mediumGrowthPerLevel: 0.05,
   },
 
   chest: {

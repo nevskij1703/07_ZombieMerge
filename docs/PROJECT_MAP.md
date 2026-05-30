@@ -19,7 +19,7 @@
 | `economy.ts` | `produceCost(tier)`, `canAfford(scrap, cost)`. | ~13 |
 | `merge.ts` | Field cell ops: `canMergeIndices`, `mergeInto`, `moveOrSwap`, `placeFirstFree`, `isFull`, `pullFromInventory`, `addLoot`, `resizeField`. **Лутбоксы блокируются `isWeaponCellValue` из `lootbox.ts`.** | ~120 |
 | `lootbox.ts` | Кодирование лутбоксов в клетках: `LOOTBOX_MEDIUM_CODE=1001`, `LOOTBOX_ELITE_CODE=1002`. `isWeaponCellValue`, `isLootboxCode`, `lootboxKindOfCode`, `rollLootboxTier(kind, ws, best, rng)`. | ~55 |
-| `levelGen.ts` | `generateLevel(level, ctx?)` детерминированная. Sample tier по `sampleZombieTier`. `enforceMinTypes` на L1. Crate HP = 2×max лиции, lootbox kind по `mediumShare`. | ~210 |
+| `levelGen.ts` | `generateLevel(level, ctx?)` детерминированная. Sample tier по `sampleZombieTier`. `enforceMinTypes` на L1. Crate HP = 2×max лиции, lootbox kind по `mediumShare`. **Длина дорог одинакова на всех линиях**: `zombieCount` fixed + `pilesCount` сэмплится один раз/уровень + crate ЗАМЕНЯЕТ зомби. **Anchored shuffle**: тиры зомби сортируются, режутся на 3 зоны (weak/mid/strong по ~1/3), внутри mid и strong — Fisher-Yates → финал линии 50/50 топ-или-предтоп. | ~225 |
 | `battleSim.ts` | Pure simulator. `simulateBattle(level, arsenals)` → `BattleResult`. Lunge-модель: carry-пробивание (`carryIn`/`carryOut`). Чистая, без RNG. | ~190 |
 | `progression.ts` | `laneArsenals(field)` (фильтрует лутбоксы), `applyBattleResult(state, result)`, `bestWeaponTier(state)`. | ~80 |
 | `autotest.ts` | Headless greedy player. `runAutotest(50)` → `AutotestReport`. Поля sample: `lanesReached`, `lanesTotal`, `weaponsLooted`, `lootboxesLooted`. | ~250 |
@@ -30,7 +30,7 @@
 
 | Файл | Что |
 |------|-----|
-| `BootScene.ts` | Init: миграции, selftest, → WorldScene. |
+| `BootScene.ts` | Двухфазная загрузка: 1) Spine JSON локации, 2) PNG-слои (имена из JSON). Затем self-tests + → WorldScene. |
 | `WorldScene.ts` | **Главная сцена** — база + бой в одной. Modes: `base/transition/battle/returning/showing_result`. Камера скроллит от Y=0 (base) к Y<0 (road). См. §3 для геометрии. |
 | `sceneKeys.ts` | `{ Boot: 'Boot', World: 'World' }`. |
 
@@ -40,9 +40,29 @@
 |------|-----|
 | `hud.ts` | Топ-бар: лом + алмазы. |
 | `mergeBoard.ts` | Мердж-грид: drag-merge, tap-merge, tap-to-open lootbox, drag-to-trash. Callbacks: `onChange/onMerge/onOpenLootbox/onTrash`. |
-| `inventoryBar.ts` | Переполнение (`state.inventory`). Tap → `pullFromInventory`. |
+| `inventoryBar.ts` | Переполнение (`state.inventory`) как **бесконечный стек 1-ячейка**. Видна верхушка (последний добытый) + `×N` справа. Tap → `pullFromInventory` (pop + случайная свободная клетка). |
 | `button.ts` | Прим. кнопка. `setLabel/setBg/setEnabled`. |
 | `devPanel.ts` | DEV-only (`import.meta.env.DEV`): ресурсы / прогресс / баланс-редактор / autotest. |
+
+### Art (`src/art/`) — финальный визуал локаций
+
+| Файл | Что |
+|------|-----|
+| `locationLoader.ts` | Универсальный JSON-формат `figma-layout-1`: top-left coords (Y down) + width/height + drawOrder + flipX/Y. `parseLocation(json)` → `LocationManifest`. `buildLocation(scene, manifest, opts, overrides)` → Phaser.Image per layer (origin 0.5). `uniqueImages(manifest)` — дедуп для preload (несколько слоёв могут ссылаться на одну текстуру, например road_l1 → road_r* через flipX). |
+
+### Editor (`src/editor/`) — визуальный редактор (DEV-only)
+
+| Файл | Что |
+|------|-----|
+| `layoutOverrides.ts` | LocalStorage CRUD для per-id override (x/y/scaleX/scaleY/depth/visible/deleted). Ключ `zm_layout_overrides`. `applyOverride(obj, ovr)`, `exportOverridesJSON()`. |
+| `layoutEditor.ts` | Класс `LayoutEditor(scene)`. Включается из dev-panel'и. Drag элементов, click → выделение, HTML overlay-panel с numeric inputs (X/Y/ScaleX/ScaleY/Uniform/Depth). Кнопки: Reset item / Hide / Duplicate / Delete / Export JSON / Reset ALL. |
+
+### Public arts (`public/art/<location>/`)
+
+| Путь | Что |
+|------|-----|
+| `public/art/base/base.json` | Манифест слоёв базы в формате `figma-layout-1` (импорт из Figma). |
+| `public/art/base/images/*.png` | PNG-слои (имена = `image` из JSON). `road_l1.png` — общий для 8 сегментов дороги (road_l/r через flipX). |
 
 ### Config (`src/config/`)
 
@@ -141,10 +161,24 @@ Camera:
 
 Constants in WorldScene:
   GATE_Y=440, GATE_BUFFER=50, ZOMBIE_SPACING=64, CHEST_GAP=64
-  CAMERA_TOP_BUFFER=140
+  FIGHTER_VIEW_OFFSET = DESIGN_HEIGHT/3  ≈ 427   // лидер у сундука на верхней 1/3 экрана
+  CAMERA_TOP_BUFFER = FIGHTER_VIEW_OFFSET-46+60 ≈ 441 // запас «неба» над сундуком
   WORLD_TOP_BOUND=-3500, WORLD_BOTTOM_BOUND=DESIGN_HEIGHT+600
-  FIGHTER_VIEW_OFFSET = DESIGN_HEIGHT*0.45
   OFF_SCREEN_BELOW_Y = DESIGN_HEIGHT+200 (куда уходят retreating)
+
+Render layers (depth scheme):
+  • UI screen-space (scrollFactor=0) — поверх всего, не уезжает с камерой.
+      depth 300: HUD.
+      depth 150–152: result modal (dim/panel/text/back).
+      depth 100: produceBtn/battleBtn (visible=false в бою), СКИП, ×speed.
+  • World (scrollFactor=1) — уезжает с камерой.
+      depth 50–51: mergeOverlay «В БОЮ» (затемнение мердж-поля).
+      depth 15: renderChestContent (награда над сундуком).
+      depth ≥5: бойцы.
+      depth 0 (default): мердж-поле, инвентарь, ТРЭШ, зомби/коробки/сундуки/гейты/HP-бары.
+      depth -10..-9: примитивы-фон (городский квадрат / забор / база — fallback если нет арта).
+      depth -45: тайлы динамической дороги (road_l1).
+      depth -50..-42: статические Figma-слои базы (ground/wall/gate/lamp в порядке drawOrder).
 ```
 
 ---
@@ -188,6 +222,9 @@ Constants in WorldScene:
   - `generateLevel(level, ctx)` — детерминированна (seed=level + ctx).
   - `simulateBattle(level, arsenals)` — без RNG, чистый функционал.
   - Lootbox tier roll — при ОТКРЫТИИ, не при выпадении (отдельный `lootRng`).
+- **Lane length parity**: `lanes[i].obstacles.length` ОДИНАКОВ для всех линий уровня
+  (`zombieCount + pilesCount` где оба не зависят от линии). Сундуки выровнены по единой Y.
+  Если меняешь genLane — не нарушай это.
 - **Save schema**: один ключ `zm_save`. Если изменяешь формат `SaveState` — миграция В `core/migrations.ts` обязательна. Бамп `schemaVersion` через `migrations[N]`.
 - **Render order**: камера показывает `setScrollFactor(0)` для UI (СКИП, ×speed, result modal, toast). Остальное в мировом пространстве.
 

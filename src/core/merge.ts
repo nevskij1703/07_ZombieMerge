@@ -89,17 +89,23 @@ export function addLoot(
   return 'inventory';
 }
 
-/** Вынести предмет из инвентаря (по индексу) на свободную клетку поля. */
+/** Достать ВЕРХ стека инвентаря (последний добытый) и положить в случайную свободную
+ *  клетку поля. Инвентарь визуально однослотовый бесконечный стек — поэтому индекс не
+ *  принимается, всегда pop с конца. Возвращает false, если стек пуст или поле full. */
 export function pullFromInventory(
   f: FieldState,
   inventory: WeaponTier[],
-  invIndex: number,
+  rng: () => number = Math.random,
 ): boolean {
-  if (invIndex < 0 || invIndex >= inventory.length) return false;
-  const free = firstFreeIndex(f);
-  if (free === -1) return false;
-  f.cells[free] = inventory[invIndex];
-  inventory.splice(invIndex, 1);
+  if (inventory.length === 0) return false;
+  // Собираем индексы всех свободных клеток.
+  const free: number[] = [];
+  for (let i = 0; i < f.cells.length; i++) if (f.cells[i] == null) free.push(i);
+  if (free.length === 0) return false;
+  const item = inventory.pop();
+  if (item == null) return false;
+  const cellIdx = free[Math.floor(rng() * free.length)]!;
+  f.cells[cellIdx] = item;
   return true;
 }
 

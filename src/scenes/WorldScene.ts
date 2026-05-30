@@ -34,22 +34,57 @@ import { isWeaponCellValue, rollLootboxTier } from '../core/lootbox';
 import { getBalance } from '../core/balanceRuntime';
 import { makeRng } from '../core/rng';
 import { Hud } from '../ui/hud';
-import { MergeBoard } from '../ui/mergeBoard';
+import { MergeBoard, type BoardRect } from '../ui/mergeBoard';
 import { InventoryBar } from '../ui/inventoryBar';
 import { Button } from '../ui/button';
+import { MainScreenUI } from '../ui/mainScreen';
+import { parseLocation, buildLocation, findTileset, type BuiltLocation, type LocationManifest } from '../art/locationLoader';
+import { loadOverrides } from '../editor/layoutOverrides';
+import { LayoutEditor } from '../editor/layoutEditor';
 
 // ============================ Layout constants =================================
 
 const GATE_Y = 440;          // ворота — общая граница базы и города
-const GATE_BUFFER = 50;      // зазор между воротами и первым препятствием
+// Дистанция от ворот до ПЕРВОГО зомби в линии. Должна быть достаточно большой, чтобы
+// первый зомби находился ЗА ПРЕДЕЛАМИ видимой зоны базы (Y < 0 при scrollY=0).
+// При GATE_Y=440 и FIRST_ZOMBIE_OFFSET=500 → первый зомби на Y = -60 (вне экрана).
+// Эффект: «зомби были там всегда» — они появляются в кадре только когда камера едет
+// вверх во время боя, а на базе их не видно.
+const FIRST_ZOMBIE_OFFSET = 500;
 const ZOMBIE_SPACING = 64;   // КОНСТАНТНЫЙ шаг между препятствиями (≈ размер токена)
 const CHEST_GAP = 64;        // зазор между самым дальним препятствием и сундуком
-const CAMERA_TOP_BUFFER = 140; // запас над сундуком — чтоб камера показала чуть выше
+
+// =========================== [EXP: zombie-movement] ============================
+// Экспериментальная фича: зомби идут к бойцу. Главный switch — если ставить
+// `ZOMBIE_MOVEMENT_ENABLED = false`, поведение полностью возвращается к статичным
+// зомби (все ссылки на флаг защищены `if`). Маркер `EXP: zombie-movement` в
+// комментариях помогает найти все связанные места grep'ом для отката.
+//
+// Правила движения:
+//   • Зомби активируется когда попадает в видимую зону камеры (scrollY..+H).
+//   • Стоит на месте если на его линии нет бойца.
+//   • По своей линии (X не меняется).
+//   • Не проходит сквозь других зомби/коробки (collision по center distance ≥ size).
+//     Лом (scrap) проходимый — не блокирует.
+//   • Скорость = ZOMBIE_SPEED_RATIO × скорости бойца.
+//   • После каждого удара по зомби — stun на ZOMBIE_STUN_MS (= ~backstep duration).
+//   • Никогда не идёт ниже ворот (hard limit = GATE_Y − tokenSize/2).
+const ZOMBIE_MOVEMENT_ENABLED = true;
+const ZOMBIE_SPEED_RATIO = 0.25;
+const ZOMBIE_STUN_MS = 180;
+const ZOMBIE_STOP_MARGIN = 6; // зазор перед бойцом/другим зомби, чтобы не «врастали»
 
 // Камера. scrollY относительно мира (top-left viewport). 0 = база, отрицательные — дорога.
 const WORLD_TOP_BOUND = -3500;
 const WORLD_BOTTOM_BOUND = DESIGN_HEIGHT + 600;
-const FIGHTER_VIEW_OFFSET = DESIGN_HEIGHT * 0.45; // как высоко в кадре стоит лидер
+// Лидер у сундука должен стоять на верхней 1/3 экрана (= «линия 2/3 экрана» сверху).
+// Это «как высоко в кадре стоит лидер» — большее значение = ниже на экране.
+const FIGHTER_VIEW_OFFSET = DESIGN_HEIGHT / 3;
+// Запас «неба» над сундуком, чтобы камера могла уехать достаточно высоко и держать
+// лидера на FIGHTER_VIEW_OFFSET (а не упереться в верхнюю границу). Формула:
+// worldTopY = chestRowY - CAMERA_TOP_BUFFER должна быть ≤ требуемого scrollY у сундука
+// (chestRowY + 46 − FIGHTER_VIEW_OFFSET), т.е. CAMERA_TOP_BUFFER ≥ FIGHTER_VIEW_OFFSET − 46.
+const CAMERA_TOP_BUFFER = FIGHTER_VIEW_OFFSET - 46 + 60; // +60 «свободного неба» сверху
 const OFF_SCREEN_BELOW_Y = DESIGN_HEIGHT + 200;  // куда уходят отступающие бойцы
 
 // ============================ Color palette ====================================
@@ -107,9 +142,27 @@ export class WorldScene extends Phaser.Scene {
   private hud!: Hud;
   private board!: MergeBoard;
   private inv!: InventoryBar;
-  private produceBtn!: Button;
-  private battleBtn!: Button;
+  private mainUI!: MainScreenUI;
   private trashRect: { x: number; y: number; w: number; h: number } | null = null;
+  private trashContainer: Phaser.GameObjects.Container | null = null;
+  private trashSize = 0;
+  private trashPlaceArt: Phaser.GameObjects.Image | null = null;
+  private invPlaceArt: Phaser.GameObjects.Image | null = null;
+  private battleBgGround: Phaser.GameObjects.Image | null = null;
+  /** Graphics для merge-ground (фон мердж-поля). Перерисовывается при relayout — bg
+   *  адаптируется под форму field (для не-квадратных 2×3 / 3×4 / 4×5). */
+  private mergeGroundGfx: Phaser.GameObjects.Graphics | null = null;
+  private gradientTop: Phaser.GameObjects.Image | null = null;
+  private gradientBot: Phaser.GameObjects.Image | null = null;
+  private baseLocation: BuiltLocation | null = null;
+  private baseManifest: LocationManifest | null = null;
+  /** Верхняя Y-граница «постоянной» дороги (в координатах baseRoadContainer'а).
+   *  Battle road extension продолжает её ВЫШЕ до worldTopY (+ запас). */
+  private baseRoadTopY = 0;
+  /** Контейнер всех road tiles (base + battle extension). Зарегистрирован в LayoutEditor,
+   *  чтобы пользователь мог двигать дорогу как одно целое (стартовая позиция). */
+  private baseRoadContainer: Phaser.GameObjects.Container | null = null;
+  layoutEditor: LayoutEditor | null = null;
   private lootRng: () => number = () => Math.random();
 
   // === Battle state ===
@@ -119,13 +172,17 @@ export class WorldScene extends Phaser.Scene {
   private fighters: Phaser.GameObjects.Container[] = [];
   private fighterTierTexts: Phaser.GameObjects.Text[] = [];
   private fighterHitsTexts: Phaser.GameObjects.Text[] = [];
+  /** Кэш текущего показанного тира/ресурса для каждого бойца — для пошагового decrement
+   *  на каждом target stop (один kill = один hit, обновляется СИНХРОННО с applyHpSnap).
+   *  В конце lunge'а sync'имся с авторитетным `ev.weaponTierAfter` (переключение оружия). */
+  private fighterTierShown: number[] = [];
+  private fighterHitsRemaining: number[] = [];
   private fighterRings: Phaser.GameObjects.Arc[] = [];
-  private chestTokens: Phaser.GameObjects.Rectangle[] = [];
+  private chestTokens: Phaser.GameObjects.Container[] = [];
   private obTokens: (Phaser.GameObjects.GameObject | null)[][] = [];
   private obBars: (Phaser.GameObjects.Rectangle | null)[][] = [];
   private obBarBgs: (Phaser.GameObjects.Rectangle | null)[][] = [];
   private obHpTexts: (Phaser.GameObjects.Text | null)[][] = [];
-  private gateHalves: Phaser.GameObjects.Rectangle[] = [];
   private battleNodes: Phaser.GameObjects.GameObject[] = []; // teardown list
   private lanesDone = 0;
   private resultShown = false;
@@ -139,6 +196,9 @@ export class WorldScene extends Phaser.Scene {
   private worldTopY = -200;
   private laneWidth = 0;
   private maxObsCount = 0;
+  /** [EXP: zombie-movement] Размер токена препятствия (диаметр zombie/сторона crate),
+   *  кэшируется в buildRoad для использования в `tickZombieMovement` (collision). */
+  private obstacleTokenSize = 0;
 
   // === Tween/timing ===
   private readonly MOVE = 440;
@@ -156,23 +216,53 @@ export class WorldScene extends Phaser.Scene {
     this.mode = 'base';
     this.lootRng = makeRng(Date.now() & 0x7fffffff);
 
-    const cx = DESIGN_WIDTH / 2;
-
-    // === Фон (бесконечно вверх для города/дороги) ===
-    // Большой прямоугольник города уходит далеко в негативный Y.
-    this.add.rectangle(cx, -1500, DESIGN_WIDTH, 4000, COLORS.city).setOrigin(0.5).setDepth(-10);
-    // Забор у ворот.
-    this.add.rectangle(cx, GATE_Y, DESIGN_WIDTH, 16, COLORS.fence).setOrigin(0.5).setDepth(-9);
-    // База ниже ворот.
-    this.add.rectangle(cx, 855, DESIGN_WIDTH, 850, COLORS.base).setOrigin(0.5).setDepth(-9);
-    this.add
-      .text(cx, 250, 'ГОРОД', { fontFamily: 'monospace', fontSize: '22px', color: '#5c7a5c' })
-      .setOrigin(0.5)
-      .setDepth(-8);
+    // === Финальный арт локации Base (если загрузился в Boot) ===
+    // Дровные заглушки (city/fence/base prim, лейбл «ГОРОД», коричневые гейты) удалены —
+    // теперь рисуется только финальный арт. Если арт не загрузился — экран будет пустым.
+    this.buildBaseArt();
+    // Постоянная дорога над воротами — видна в base-режиме (Y=0..GATE_Y).
+    // Battle road extension позже продолжит её вверх до chestRowY.
+    this.buildBaseRoad();
+    // Градиенты top/bottom — фигма linear-gradient(0deg, black @ 50%, transparent @ 100%) × 0.5.
+    this.buildGradients();
+    // === Visual editor (включается из dev-panel'и; в release tree-shake'нется) ===
+    // Фаза 1: создаём редактор и регистрируем figma-арт.
+    if (import.meta.env.DEV) {
+      this.layoutEditor = new LayoutEditor(this);
+      if (this.baseLocation) {
+        for (const [id, img] of this.baseLocation.byId) {
+          this.layoutEditor.register(id, img, id.replace(/^base\./, ''));
+        }
+      }
+      // Дорога — отдельный Container; редактируется как целое (стартовая позиция).
+      if (this.baseRoadContainer) {
+        this.layoutEditor.register(
+          'base.road',
+          this.baseRoadContainer as unknown as Phaser.GameObjects.Container,
+          'Base / Дорога',
+        );
+      }
+    }
 
     // === HUD/база ===
     this.hud = new Hud(this);
     this.buildBaseUI();
+
+    // Visual editor — фаза 2: регистрируем UI как отдельные элементы.
+    if (import.meta.env.DEV && this.layoutEditor) {
+      this.layoutEditor.register('ui.hud', this.hud.container as unknown as Phaser.GameObjects.Container, 'UI / HUD');
+      this.layoutEditor.register('ui.inventory', this.inv.container, 'UI / Inventory');
+      if (this.trashContainer) {
+        this.layoutEditor.register('ui.trash', this.trashContainer, 'UI / Trash');
+      }
+      this.layoutEditor.register('ui.btn.profile', this.mainUI.btnProfile.container, 'UI / Профиль');
+      this.layoutEditor.register('ui.btn.upgrade', this.mainUI.btnUpgrade.container, 'UI / Апгрейд');
+      this.layoutEditor.register('ui.btn.produce', this.mainUI.btnProduce.container, 'UI / Произвести');
+      this.layoutEditor.register('ui.btn.cards', this.mainUI.btnCards.container, 'UI / Карты');
+      this.layoutEditor.register('ui.btn.shop', this.mainUI.btnShop.container, 'UI / Магазин');
+      this.layoutEditor.register('ui.btn.fight', this.mainUI.btnFight.container, 'UI / В БОЙ!');
+      this.layoutEditor.register('ui.btn.settings', this.hud.settingsBtn, 'UI / Настройки');
+    }
 
     // === Camera ===
     // setBounds разрешает скроллить от WORLD_TOP_BOUND до WORLD_BOTTOM_BOUND-DESIGN_HEIGHT.
@@ -183,9 +273,105 @@ export class WorldScene extends Phaser.Scene {
   }
 
   update(): void {
+    // Если редактор подвинул trash — обновить hit-area drop-зоны.
+    this.syncTrashRect();
     if (this.mode !== 'battle' && this.mode !== 'transition' && this.mode !== 'returning') return;
     this.updateCameraFollow();
+    // [EXP: zombie-movement] зомби двигаются только когда бой идёт. В transition их
+    // не двигаем (бойцы ещё на базе, fighter[li] на Y=540 — зомби бы пошли в base).
+    if (ZOMBIE_MOVEMENT_ENABLED && (this.mode === 'battle' || this.mode === 'returning')) {
+      this.tickZombieMovement();
+    }
   }
+
+  // ============= [EXP: zombie-movement] методы движения зомби ===================
+
+  /** Каждый кадр двигает зомби/коробки вниз (к воротам) с учётом:
+   *  видимости в камере, наличия бойца на линии, collision с другими obstacle'ами,
+   *  stun после удара. Лом (scrap) не двигается и не блокирует. */
+  private tickZombieMovement(): void {
+    if (!this.level) return;
+    const cam = this.cameras.main;
+    const viewTopY = cam.scrollY;
+    const viewBotY = cam.scrollY + DESIGN_HEIGHT;
+    const now = this.time.now;
+    const dt = this.game.loop.delta;
+    // Скорость бойца = 1/PIXEL_TIME px/ms. Зомби = доля от неё.
+    const speed = (1 / this.PIXEL_TIME) * ZOMBIE_SPEED_RATIO;
+    const dy = speed * dt;
+    const tokenSize = this.obstacleTokenSize || 44;
+    // Hard limit: ниже ворот зомби не пойдёт никогда (даже если боец отступил за ворота).
+    const gateLimitY = GATE_Y - tokenSize / 2;
+
+    for (let li = 0; li < this.level.lanes.length; li++) {
+      const fighter = this.fighters[li];
+      if (!fighter) continue; // на этой линии нет бойца — все зомби стоят
+      const lineTokens = this.obTokens[li];
+      if (!lineTokens) continue;
+      const obstacles = this.level.lanes[li].obstacles;
+
+      // upperLimitY — максимально допустимая Y центра следующего (более далёкого) зомби.
+      // Стартует от бойца: зомби ближайший к воротам не может пройти бойца, плюс stop margin.
+      // Но не ниже ворот.
+      let upperLimitY = Math.min(fighter.y - tokenSize - ZOMBIE_STOP_MARGIN, gateLimitY);
+
+      // Идём от idx=0 (ближайший к воротам, наибольший Y) к idx=N-1 (самый дальний, наименьший Y).
+      for (let idx = 0; idx < lineTokens.length; idx++) {
+        const token = lineTokens[idx];
+        if (!token) continue; // убит — slot пустой, не блокирует
+        const ob = obstacles[idx];
+        if (ob.kind === 'scrap') continue; // лом не двигается, не блокирует
+        const tobj = token as Phaser.GameObjects.GameObject & { y: number };
+        const currentY = tobj.y;
+        // Не в видимой зоне → не двигается, но блокирует следующих (они «толпятся» сверху).
+        if (currentY < viewTopY || currentY > viewBotY) {
+          upperLimitY = currentY - tokenSize - ZOMBIE_STOP_MARGIN;
+          continue;
+        }
+        // Stunned после удара — стоит, но блокирует следующих.
+        const stunUntil = (token.getData('stunnedUntil') as number | undefined) ?? 0;
+        if (now < stunUntil) {
+          upperLimitY = currentY - tokenSize - ZOMBIE_STOP_MARGIN;
+          continue;
+        }
+        // Двигаемся вниз (Y увеличивается), но не дальше upperLimitY.
+        const desiredY = Math.min(currentY + dy, upperLimitY);
+        if (desiredY > currentY) {
+          this.moveObstacle(li, idx, desiredY - currentY);
+          upperLimitY = desiredY - tokenSize - ZOMBIE_STOP_MARGIN;
+        } else {
+          upperLimitY = currentY - tokenSize - ZOMBIE_STOP_MARGIN;
+        }
+      }
+    }
+  }
+
+  /** Сдвинуть все визуальные части препятствия (token + HP bar + bg + text) на dy. */
+  private moveObstacle(li: number, idx: number, dy: number): void {
+    if (dy === 0) return;
+    const token = this.obTokens[li]?.[idx];
+    if (token && 'y' in token) {
+      (token as Phaser.GameObjects.GameObject & { y: number }).y += dy;
+    }
+    const bar = this.obBars[li]?.[idx];
+    if (bar) bar.y += dy;
+    const bg = this.obBarBgs[li]?.[idx];
+    if (bg) bg.y += dy;
+    const txt = this.obHpTexts[li]?.[idx];
+    if (txt) txt.y += dy;
+  }
+
+  /** Текущая Y центра препятствия (учитывает движение). Если токена нет — fallback
+   *  на статичную позицию `obstacleY(idx)`. */
+  private getObstacleCurrentY(li: number, idx: number): number {
+    const token = this.obTokens[li]?.[idx];
+    if (token && 'y' in token) {
+      return (token as Phaser.GameObjects.GameObject & { y: number }).y;
+    }
+    return this.obstacleY(idx);
+  }
+
+  // =================================================================================
 
   /** Камера тянется к самой высокой точке лидера и НЕ возвращается вниз во время боя. */
   private updateCameraFollow(): void {
@@ -207,41 +393,162 @@ export class WorldScene extends Phaser.Scene {
 
   // ============================== Base UI ======================================
 
+  /** Тёмные градиенты top/bottom строго по figma `fill_VNRO2G`:
+   *   linear-gradient(0deg, rgba(0,0,0,1) 50%, rgba(0,0,0,0) 100%) × opacity 0.5.
+   *  0deg в CSS = bottom → top. 0..50% — solid black, 50..100% — fade-out до transparent.
+   *  Применено к rect 720×215 (top) и 720×222 (bottom). Реализовано через canvas-textures
+   *  Phaser'а: создаём 2 одноразовые текстуры с linear-gradient'ом и кладём как Image. */
+  private buildGradients(): void {
+    const make = (key: string, w: number, h: number, flipped: boolean): void => {
+      if (this.textures.exists(key)) return;
+      const tex = this.textures.createCanvas(key, w, h);
+      if (!tex) return;
+      const ctx = tex.getContext();
+      // figma fill_VNRO2G применяется к обоим (top/bot), но визуально direction разная:
+      //   • bottom-gradient: тёмное у НИЖНЕГО края экрана, прозрачное к центру (центр игры).
+      //   • top-gradient:    тёмное у ВЕРХНЕГО края экрана (под HUD), прозрачное к центру.
+      // Для bot: gradient bottom→top, для top: top→bottom (отражено).
+      const [y0, y1] = flipped ? [0, h] : [h, 0];
+      const grd = ctx.createLinearGradient(0, y0, 0, y1);
+      grd.addColorStop(0, 'rgba(0,0,0,0.5)');
+      grd.addColorStop(0.5, 'rgba(0,0,0,0.5)');
+      grd.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = grd;
+      ctx.fillRect(0, 0, w, h);
+      tex.refresh();
+    };
+    make('grad-top', DESIGN_WIDTH, 215, true); // тёмное наверху
+    make('grad-bot', DESIGN_WIDTH, 222, false); // тёмное внизу
+
+    // Top: y=0..215. Bottom: y=1058..1280.
+    const top = this.add.image(0, 0, 'grad-top').setOrigin(0, 0).setScrollFactor(0).setDepth(250);
+    const bot = this.add.image(0, 1058, 'grad-bot').setOrigin(0, 0).setScrollFactor(0).setDepth(99);
+    this.gradientTop = top;
+    this.gradientBot = bot;
+  }
+
+  /** Загружает финальный арт локации Base из cached манифеста + текстур (Boot грузил их).
+   *  Origin/scale подобраны так, чтобы Figma-ворота попадали ~на GATE_Y. Финальные значения
+   *  подкрутишь в layout-редакторе (dev-panel → Layout). */
+  private buildBaseArt(): void {
+    const json = this.cache.json.get('base-layout');
+    if (!json) return;
+    const manifest = parseLocation(json);
+    this.baseManifest = manifest;
+    if (manifest.layers.length === 0) return;
+    // Origin/scale: фрейм Figma 720×3989. Координаты top-left, без масштаба.
+    // X: центр кадра базы по X = центр экрана. В Figma layers идут от x≈-104 до x≈725,
+    // ширина ≈ 720. Установка originX = 0 → центры layer'ов окажутся в области экрана.
+    // Y: ворота figma центр ≈ Y=2964. Хотим Phaser Y ≈ GATE_Y=440. → originY = 440 - 2964 = -2524.
+    // Scale = 1 (figma пиксель = phaser пиксель); подкрутится через редактор/overrides.
+    this.baseLocation = buildLocation(
+      this,
+      manifest,
+      {
+        originX: 0,
+        originY: -2524,
+        scale: 1,
+        baseDepth: -50, // глубоко под всем UI/боем; финальные layers depth -50..-42
+        texturePrefix: 'base',
+      },
+      loadOverrides(),
+    );
+  }
+
+  /** Собирает вертикальную полосу дороги из тайла `road_l1`. Тайлы укладываются С НАХЛЁСТОМ
+   *  в 1px (чтобы не было дробных щелей при масштабировании setDisplaySize). Шаг между
+   *  центрами = `tileH − 1`, а сам тайл отрисовывается в полный `tileH` → соседние тайлы
+   *  перекрываются на 1px на стыке.
+   *  Координаты `bottomY`/`topY` — в WORLD-системе. Tile добавляется в `baseRoadContainer`
+   *  (если создан) — там depth = −49.5 (над `base.ground`, под стенами/воротами).
+   *  Возвращает WORLD-y верхнего края последнего тайла (для стыковки сегментов). */
+  private buildRoadStripe(bottomY: number, topY: number, intoBattle: boolean): number {
+    const tilesetKey = 'base.road_l1';
+    if (!this.textures.exists(tilesetKey) || bottomY <= topY) return bottomY;
+    const tileset = this.baseManifest ? findTileset(this.baseManifest, 'road_l1') : null;
+    const sourceW = tileset?.width ?? 463;
+    const sourceH = tileset?.height ?? 314;
+    const aspect = sourceH / sourceW;
+    // 2 тайла (левый+flipX правый) занимают ровно ширину экрана.
+    const tileW = DESIGN_WIDTH / 2;
+    const tileH = tileW * aspect;
+    const stepY = tileH - 1; // нахлёст 1px между соседними тайлами
+    const overshoot = stepY * 0.6;
+    const totalH = bottomY - topY + overshoot;
+    const tileCount = Math.max(1, Math.ceil(totalH / stepY));
+    const leftCx = DESIGN_WIDTH / 4;
+    const rightCx = (3 * DESIGN_WIDTH) / 4;
+    // Если есть container — кладём tile в него (depth наследуется), координаты делаем
+    // относительными (мир − container.{x,y}). Иначе fallback — задаём depth каждому tile'у.
+    const container = this.baseRoadContainer;
+    const dx = container?.x ?? 0;
+    const dy = container?.y ?? 0;
+    let topReached = bottomY;
+    for (let i = 0; i < tileCount; i++) {
+      // tile_0 центр на bottomY − tileH/2 (низ тайла строго на bottomY).
+      // Шаг между центрами = stepY < tileH → нахлёст.
+      const cy = bottomY - tileH / 2 - i * stepY;
+      const left = this.add
+        .image(leftCx - dx, cy - dy, tilesetKey)
+        .setOrigin(0.5)
+        .setDisplaySize(tileW, tileH);
+      const right = this.add
+        .image(rightCx - dx, cy - dy, tilesetKey)
+        .setOrigin(0.5)
+        .setDisplaySize(tileW, tileH)
+        .setFlipX(true);
+      if (container) {
+        container.add([left, right]);
+      } else {
+        left.setDepth(-49.5);
+        right.setDepth(-49.5);
+      }
+      if (intoBattle) this.battleNodes.push(left, right);
+      topReached = cy - tileH / 2;
+    }
+    return topReached;
+  }
+
+  /** Постоянная «базовая» дорога над воротами — видна в base-режиме в Y=0..GATE_Y.
+   *  Не teardown'ится при `returnToBase`. Контейнер регистрируется в LayoutEditor —
+   *  пользователь может двигать дорогу как стартовую позицию (battle extension будет
+   *  начинаться от текущего верха базовой дороги, учитывая смещение container'а). */
+  private buildBaseRoad(): void {
+    this.baseRoadContainer = this.add.container(0, 0).setDepth(-49.5);
+    this.baseRoadTopY = this.buildRoadStripe(GATE_Y, 0, false);
+  }
+
+  /** Battle road extension: дорисовывает дорогу ВЫШЕ верхней границы базовой дороги до
+   *  `worldTopY` (а не `chestRowY`) — чтобы за сундуками не оставалось пустоты в кадре.
+   *  Учитывает текущий `container.y` (если пользователь двинул дорогу в редакторе).
+   *  Уничтожается в `returnToBase` через `battleNodes`. Базовая дорога остаётся. */
+  private buildRoadTiles(): void {
+    // Эффективная WORLD-y верхней границы базовой дороги (с учётом editor shift).
+    const baseTopWorld = this.baseRoadTopY + (this.baseRoadContainer?.y ?? 0);
+    // Дотягиваем выше worldTopY с запасом (камера может ехать почти до worldTopY).
+    const targetTop = this.worldTopY - 200;
+    if (targetTop < baseTopWorld) {
+      // +1: нахлёст 1px на стык base→battle (как и между соседними tile'ами внутри stripe).
+      this.buildRoadStripe(baseTopWorld + 1, targetTop, true);
+    }
+  }
+
   private buildBaseUI(): void {
-    const cx = DESIGN_WIDTH / 2;
     const s = getState();
 
-    // Trash drop-zone.
-    const trashW = 110, trashH = 74;
-    const trashX = DESIGN_WIDTH - 20 - trashW;
-    const trashY = 885;
-    this.trashRect = { x: trashX, y: trashY, w: trashW, h: trashH };
-    this.add
-      .rectangle(trashX + trashW / 2, trashY + trashH / 2, trashW, trashH, 0x4a2020)
-      .setOrigin(0.5)
-      .setStrokeStyle(2, 0xb23b3b, 0.8);
-    this.add
-      .text(trashX + trashW / 2, trashY + trashH / 2 - 10, '🗑 ТРЭШ', {
-        fontFamily: 'monospace', fontSize: '18px', color: '#ffb0b0',
-      })
-      .setOrigin(0.5);
-    this.add
-      .text(trashX + trashW / 2, trashY + trashH / 2 + 18, '50% лома', {
-        fontFamily: 'monospace', fontSize: '11px', color: '#ffd0d0',
-      })
-      .setOrigin(0.5);
-
-    // Merge board.
+    // Merge board — рамка для рассчёта позиции/размера ячеек. Figma main UI (158:251):
+    // x=135, y=555, 449×449. MergeBoard сам вычисляет outerBounds под форму поля
+    // (для не-квадратных field — bg сжимается по короткой оси).
     this.board = new MergeBoard(
       this,
       s.field,
-      { x: 40, y: 465, w: DESIGN_WIDTH - 80, h: 410 },
+      { x: 135, y: 555, w: 449, h: 449 },
       {
         onChange: () => {
           if (this.mode !== 'base') return;
           save();
           this.hud.refresh();
-          this.refreshButtons();
+          this.mainUI?.refresh();
           this.inv?.rebuild();
         },
         onMerge: () => {
@@ -256,37 +563,141 @@ export class WorldScene extends Phaser.Scene {
           if (this.mode !== 'base') return false;
           return this.trashWeapon(cellIndex);
         },
+        onLayoutChanged: (outer) => this.drawMergeGround(outer),
       },
     );
+    this.battleBgGround = null;
+
+    // Inventory place + Trash place: PNG-арт фона.
+    // inventory: x=18, y=889, 100×125 (active_zone 82×82 at +9, +0).
+    // trash:     x=601, y=901, 98×113 (active_zone 82×82 at +8, -6).
+    if (this.textures.exists('ui.inv_place')) {
+      const img = this.add
+        .image(18 + 50, 889 + 62, 'ui.inv_place')
+        .setOrigin(0.5)
+        .setDisplaySize(100, 125)
+        .setDepth(0);
+      this.invPlaceArt = img;
+      // Label «ИНВЕНТАРЬ» — figma style_KHNJWT (Roboto 900, 15px, #331D10), (6, 87, 88×22) внутри
+      // inv frame (18, 889, 100×125). Центр текста в абс. координатах: 18+6+44=68, 889+87+11=987.
+      this.add
+        .text(68, 987, 'ИНВЕНТАРЬ', {
+          fontFamily: 'Roboto, Arial Black, sans-serif',
+          fontStyle: '900',
+          fontSize: '14px',
+          color: '#331D10',
+        })
+        .setOrigin(0.5)
+        .setDepth(1);
+    }
+    if (this.textures.exists('ui.trash_place')) {
+      const img = this.add
+        .image(601 + 49, 901 + 56, 'ui.trash_place')
+        .setOrigin(0.5)
+        .setDisplaySize(98, 113)
+        .setDepth(0);
+      this.trashPlaceArt = img;
+      // Label «МУСОР» — figma style_KHNJWT, color #D9D9D9, (5, 76, 88×22) внутри trash frame
+      // (601, 901, 98×113). Центр в абс: 601+5+44=650, 901+76+11=988.
+      this.add
+        .text(650, 988, 'МУСОР', {
+          fontFamily: 'Roboto, Arial Black, sans-serif',
+          fontStyle: '900',
+          fontSize: '14px',
+          color: '#D9D9D9',
+        })
+        .setOrigin(0.5)
+        .setDepth(1);
+    }
+    // Active zones: tap по инвентарю, drop на трэше. Координаты из figma active_zone.
+    const invCx = 18 + 9 + 41;
+    const invCy = 889 + 0 + 41;
+    const invSize = 82;
+    this.inv = new InventoryBar(this, invCx, invCy, invSize, () => {
+      if (this.mode !== 'base') return;
+      this.pullItem();
+    });
+    const trashCx = 601 + 8 + 41;
+    const trashCy = 901 - 6 + 41;
+    const trashSize = 82;
+    this.buildTrashItem(trashCx, trashCy, trashSize);
+
+    // Главный UI экрана: top-bar (Hud) и нижний бар (MainScreenUI).
+    this.mainUI = new MainScreenUI(this, {
+      onProduce: () => { if (this.mode === 'base') this.produce(); },
+      onBattle: () => { if (this.mode === 'base') this.goBattle(); },
+      onSettings: () => this.toast('Настройки — пока не реализовано'),
+      onProfile: () => this.toast('Профиль — пока не реализовано'),
+      onUpgrade: () => this.toast('Апгрейд — пока не реализовано'),
+      onCards: () => this.toast('Карты — пока не реализовано'),
+      onShop: () => this.toast('Магазин — пока не реализовано'),
+    });
+    this.hud.setOnSettings(() => this.toast('Настройки — пока не реализовано'));
+  }
+
+  /** Рисует фон мердж-поля (3D-стиль кнопок: shadow + outer plate + inner plate + outline).
+   *  Вызывается из `MergeBoard.onLayoutChanged` — bg перестраивается при изменении формы
+   *  field (2×3, 3×4, 4×5 → bg сжимается по короткой оси).
+   *
+   *  Цвета figma 158:251:
+   *    • shadow: смещение +4px вниз, чёрный 0.25 (effect_IGCP45 boxShadow 0 4 0 rgba(0,0,0,.25))
+   *    • outer plate (нижняя «толщина»): #927761, +10px высоты
+   *    • inner plate (верхняя поверхность): #DFBB97
+   *    • общий outline: #482C1C, 3px вокруг outer.
+   */
+  private drawMergeGround(outer: BoardRect): void {
+    if (!this.mergeGroundGfx) {
+      this.mergeGroundGfx = this.add.graphics().setDepth(0);
+    }
+    const g = this.mergeGroundGfx;
+    g.clear();
+    const { x, y, w, h } = outer;
+    const r = 22;
+    const thickness = 10; // выступ outer plate снизу (3D-эффект)
+    // 1) Тень.
+    g.fillStyle(0x000000, 0.25);
+    g.fillRoundedRect(x, y + 4, w, h + thickness, r);
+    // 2) Outer plate (выступает на 10px вниз — «толщина»).
+    g.fillStyle(0x927761, 1);
+    g.fillRoundedRect(x, y, w, h + thickness, r);
+    // 3) Inner plate (поверхность, где лежат слоты).
+    g.fillStyle(0xdfbb97, 1);
+    g.fillRoundedRect(x, y, w, h, r);
+    // 4) Общая обводка.
+    g.lineStyle(3, 0x482c1c, 1);
+    g.strokeRoundedRect(x, y, w, h + thickness, r);
+  }
+
+  /** Создать визуал мусорки (квадратный «предмет на локации» — не ячейка поля).
+   *  Hit-area для drop живёт в `this.trashRect` и синхронизируется с container в update(). */
+  private buildTrashItem(cx: number, cy: number, size: number): void {
+    // Если уже есть — уничтожаем (пересоздание при relayout).
+    if (this.trashContainer) {
+      this.trashContainer.destroy();
+      this.trashContainer = null;
+    }
+    // Прозрачный rect — invisible hit-area для drop, без визуала поверх PNG-арта.
+    const bg = this.add
+      .rectangle(0, 0, size, size, 0x000000, 0)
+      .setOrigin(0.5);
+    this.trashContainer = this.add.container(cx, cy, [bg]).setSize(size, size);
+    this.trashSize = size;
+    this.trashRect = { x: cx - size / 2, y: cy - size / 2, w: size, h: size };
     this.board.setTrashZone(this.trashRect);
+  }
 
-    // Inventory bar.
-    this.inv = new InventoryBar(
-      this,
-      { x: 20, y: 885, w: trashX - 20 - 10, h: 74 },
-      (i) => {
-        if (this.mode !== 'base') return;
-        this.pullItem(i);
-      },
-    );
-
-    // Produce button.
-    this.produceBtn = new Button(this, {
-      x: cx, y: 1010, width: 470, height: 78, label: '', fontSize: 26,
-      onClick: () => {
-        if (this.mode !== 'base') return;
-        this.produce();
-      },
-    });
-
-    // Battle button.
-    this.battleBtn = new Button(this, {
-      x: cx, y: 1112, width: 470, height: 78, label: 'В БОЙ', fontSize: 30, bg: 0xb23b3b,
-      onClick: () => {
-        if (this.mode !== 'base') return;
-        this.goBattle();
-      },
-    });
+  /** Синхронизация trashRect с позицией trashContainer (если её менял layout-editor). */
+  private syncTrashRect(): void {
+    const c = this.trashContainer;
+    const r = this.trashRect;
+    if (!c || !r) return;
+    const w = this.trashSize;
+    if (r.x !== c.x - w / 2 || r.y !== c.y - w / 2) {
+      r.x = c.x - w / 2;
+      r.y = c.y - w / 2;
+      r.w = w;
+      r.h = w;
+    }
   }
 
   private produce(): void {
@@ -309,9 +720,10 @@ export class WorldScene extends Phaser.Scene {
     this.refreshButtons();
   }
 
-  private pullItem(index: number): void {
+  private pullItem(): void {
     const s = getState();
-    if (pullFromInventory(s.field, s.inventory, index)) {
+    if (s.inventory.length === 0) return;
+    if (pullFromInventory(s.field, s.inventory)) {
       save();
       this.board.rebuildTiles();
       this.inv.rebuild();
@@ -346,11 +758,9 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private refreshButtons(): void {
-    const s = getState();
-    const cost = produceCost(s.workshopTier);
-    this.produceBtn.setLabel(`Произвести: ${weaponName(s.workshopTier)} (${cost})`);
-    this.produceBtn.setEnabled(this.mode === 'base' && canAfford(s.scrap, cost) && !isFull(s.field));
-    this.battleBtn.setEnabled(this.mode === 'base');
+    if (!this.mainUI) return;
+    this.mainUI.refresh();
+    this.mainUI.setFightEnabled(this.mode === 'base');
   }
 
   // ============================== goBattle =====================================
@@ -371,12 +781,13 @@ export class WorldScene extends Phaser.Scene {
     this.fighterTierTexts = [];
     this.fighterHitsTexts = [];
     this.fighterRings = [];
+    this.fighterTierShown = [];
+    this.fighterHitsRemaining = [];
     this.chestTokens = [];
     this.obTokens = [];
     this.obBars = [];
     this.obBarBgs = [];
     this.obHpTexts = [];
-    this.gateHalves = [];
     this.battleNodes = [];
 
     const level = generateLevel(s.level, {
@@ -391,8 +802,13 @@ export class WorldScene extends Phaser.Scene {
 
     this.buildRoad();
     this.buildSpeedHud();
-    this.produceBtn.setEnabled(false);
-    this.battleBtn.setEnabled(false);
+    // Скрываем нижний бар базы — это чистый UI, в бою не нужен.
+    this.mainUI.setBottomVisible(false);
+    this.gradientTop?.setVisible(false);
+    this.gradientBot?.setVisible(false);
+    // Place-арт инвентаря/мусорки + текст-лейблы тоже не нужны во время боя.
+    this.invPlaceArt?.setVisible(false);
+    this.trashPlaceArt?.setVisible(false);
 
     // Анимация старта: ворота открываются → бойцы спавнятся над мердж-полем → берут
     // оружие (мердж-поле «гаснет») → бегут вверх через ворота к началу своих линий.
@@ -407,23 +823,26 @@ export class WorldScene extends Phaser.Scene {
     this.chestRowY = this.obstacleY(this.maxObsCount - 1) - CHEST_GAP;
     this.worldTopY = this.chestRowY - CAMERA_TOP_BUFFER;
 
+    // === Динамическая дорога из тайла road_l1 (левая половина + flipX = правая) ===
+    // Длина дороги = от GATE_Y вверх до chestRowY. Тайлы укладываются вертикально вплотную;
+    // их количество вычисляется так, чтобы покрыть всю дорогу + небольшой запас сверху.
+    this.buildRoadTiles();
+
     for (let li = 0; li < cols; li++) {
       const x = this.colCenterX(li);
 
-      // Вертикальная дорожка.
-      const lineTopY = this.chestRowY;
-      const lineBotY = GATE_Y;
-      const line = this.add
-        .rectangle(x, (lineTopY + lineBotY) / 2, 6, lineBotY - lineTopY, 0x2a3a2a)
+      // Сундук на топе. Контейнер с телом + крышкой, чтобы крышка могла «отлететь».
+      const chestBody = this.add
+        .rectangle(0, 10, 54, 22, 0xd4af37)
         .setOrigin(0.5)
-        .setDepth(-5);
-      this.battleNodes.push(line);
-
-      // Сундук на топе.
-      const chest = this.add
-        .rectangle(x, this.chestRowY, 54, 40, 0xd4af37)
+        .setStrokeStyle(2, 0x000000, 0.4);
+      const chestLid = this.add
+        .rectangle(0, -8, 58, 14, 0xb8941f)
         .setOrigin(0.5)
-        .setStrokeStyle(3, 0x000000, 0.4);
+        .setStrokeStyle(2, 0x000000, 0.4);
+      const chest = this.add.container(x, this.chestRowY, [chestBody, chestLid]);
+      chest.setData('body', chestBody);
+      chest.setData('lid', chestLid);
       this.chestTokens[li] = chest;
       this.battleNodes.push(chest);
 
@@ -435,6 +854,7 @@ export class WorldScene extends Phaser.Scene {
       const hpTexts: (Phaser.GameObjects.Text | null)[] = new Array(obstacles.length).fill(null);
 
       const tokenSize = Math.min(this.laneWidth * 0.42, 44);
+      this.obstacleTokenSize = tokenSize; // [EXP: zombie-movement] cache для tickZombieMovement
       const barW = Math.min(tokenSize * 1.4, 60);
       const barH = 4;
 
@@ -476,23 +896,14 @@ export class WorldScene extends Phaser.Scene {
       this.obHpTexts[li] = hpTexts;
     }
 
-    // Ворота — две половинки, закрыты на старте, разъезжаются по бокам.
-    const halfW = DESIGN_WIDTH / 2;
-    const leftHalf = this.add
-      .rectangle(halfW / 2, GATE_Y, halfW - 4, 30, 0x6b4a2a)
-      .setOrigin(0.5)
-      .setStrokeStyle(3, 0x000000, 0.7);
-    const rightHalf = this.add
-      .rectangle(DESIGN_WIDTH - halfW / 2, GATE_Y, halfW - 4, 30, 0x6b4a2a)
-      .setOrigin(0.5)
-      .setStrokeStyle(3, 0x000000, 0.7);
-    this.gateHalves = [leftHalf, rightHalf];
-    this.battleNodes.push(leftHalf, rightHalf);
+    // Гейтовые примитивы больше не нужны — анимируем сами figma-ворота
+    // (`base.gate_l`/`base.gate_r`) в `playOpeningSequence` / `returnToBase`.
   }
 
-  /** Y координата препятствия с индексом idx (0 — ближайшее к воротам). */
+  /** Y координата препятствия с индексом idx (0 — ближайшее к воротам, но всё равно ВНЕ
+   *  видимой зоны базы при scrollY=0 — см. `FIRST_ZOMBIE_OFFSET`). */
   private obstacleY(idx: number): number {
-    return GATE_Y - GATE_BUFFER - (idx + 0.5) * ZOMBIE_SPACING;
+    return GATE_Y - FIRST_ZOMBIE_OFFSET - idx * ZOMBIE_SPACING;
   }
 
   private colCenterX(li: number): number {
@@ -507,7 +918,8 @@ export class WorldScene extends Phaser.Scene {
       x: 110, y: 1210, width: 180, height: 70, label: 'СКИП', fontSize: 24, bg: 0x555a66,
       onClick: () => this.skipBattle(),
     });
-    this.skipBtn.container.setScrollFactor(0).setDepth(100);
+    this.skipBtn.setScrollFactor(0);
+    this.skipBtn.setDepth(100);
 
     const speeds: Array<{ factor: number; label: string }> = [
       { factor: 0.25, label: '×0.25' }, { factor: 1, label: '×1' }, { factor: 4, label: '×4' },
@@ -518,7 +930,8 @@ export class WorldScene extends Phaser.Scene {
         label: s.label, fontSize: 22, bg: 0x3a414d,
         onClick: () => this.setSpeed(s.factor),
       });
-      btn.container.setScrollFactor(0).setDepth(100);
+      btn.setScrollFactor(0);
+      btn.setDepth(100);
       this.speedButtons.push({ btn, factor: s.factor });
     });
     this.setSpeed(1);
@@ -536,24 +949,47 @@ export class WorldScene extends Phaser.Scene {
   // ============================== Opening sequence =============================
 
   private playOpeningSequence(arsenals: number[][]): void {
-    const halfW = DESIGN_WIDTH / 2;
-    // 1) Ворота разъезжаются.
-    this.tweens.add({
-      targets: this.gateHalves[0],
-      x: -halfW / 2 + 10,
-      duration: 600,
-      ease: 'Sine.Out',
-    });
-    this.tweens.add({
-      targets: this.gateHalves[1],
-      x: DESIGN_WIDTH + halfW / 2 - 10,
-      duration: 600,
-      ease: 'Sine.Out',
-      onComplete: () => {
-        // 2) Спавн бойцов над мердж-полем + бег к старту линии (через ворота).
-        this.spawnAndDispatchFighters(arsenals);
-      },
-    });
+    // 1) Ворота + их тени разъезжаются (тень — visual продолжение створки). Группируем по
+    //    сторонам и тwen'им через относительное смещение, чтобы каждый объект ехал от своего
+    //    defaultX. Сохраняем defaultX в data для returnToBase.
+    const gateL = this.baseLocation?.byId.get('base.gate_l') ?? null;
+    const gateR = this.baseLocation?.byId.get('base.gate_r') ?? null;
+    const shdL = this.baseLocation?.byId.get('base.gate_l_shd') ?? null;
+    const shdR = this.baseLocation?.byId.get('base.gate_r_shd') ?? null;
+    const proceed = (): void => this.spawnAndDispatchFighters(arsenals);
+
+    const leftTargets = [gateL, shdL].filter((x): x is Phaser.GameObjects.Image => x != null);
+    const rightTargets = [gateR, shdR].filter((x): x is Phaser.GameObjects.Image => x != null);
+
+    if (leftTargets.length > 0 || rightTargets.length > 0) {
+      for (const obj of [...leftTargets, ...rightTargets]) {
+        if (obj.getData('defaultX') == null) obj.setData('defaultX', obj.x);
+      }
+      const off = 220;
+      if (leftTargets.length > 0) {
+        this.tweens.add({
+          targets: leftTargets,
+          x: `-=${off}`,
+          duration: 600,
+          ease: 'Sine.Out',
+        });
+      }
+      if (rightTargets.length > 0) {
+        this.tweens.add({
+          targets: rightTargets,
+          x: `+=${off}`,
+          duration: 600,
+          ease: 'Sine.Out',
+          onComplete: proceed,
+        });
+      } else {
+        // Только левые створки/тени — fallback на time delay.
+        this.time.delayedCall(600, proceed);
+      }
+    } else {
+      // Fallback — без арта ворот сразу едем дальше.
+      proceed();
+    }
   }
 
   private spawnAndDispatchFighters(arsenals: number[][]): void {
@@ -594,11 +1030,13 @@ export class WorldScene extends Phaser.Scene {
       this.fighterTierTexts[li] = tierLabel;
       this.fighterHitsTexts[li] = hitsLabel;
       this.fighterRings[li] = circle;
+      this.fighterTierShown[li] = bestTier;
+      this.fighterHitsRemaining[li] = startHits;
       this.battleNodes.push(fighter);
     }
 
-    // Визуально «забираем» оружие — мердж-плитки тускнеют.
-    this.dimMergeBoard(true);
+    // Визуально «забираем» оружие — оружейные плитки исчезают с поля (лутбоксы остаются).
+    this.board.hideWeaponTiles();
 
     // Бойцы бегут вверх через ворота к началу своей линии (чуть выше ворот).
     this.time.delayedCall(450, () => {
@@ -622,34 +1060,6 @@ export class WorldScene extends Phaser.Scene {
         });
       }
     });
-  }
-
-  // Полупрозрачный оверлей над мердж-полем — визуальное «оружие забрано» на время боя.
-  private mergeOverlay: Phaser.GameObjects.Rectangle | null = null;
-
-  private dimMergeBoard(dim: boolean): void {
-    if (dim) {
-      if (this.mergeOverlay) return;
-      this.mergeOverlay = this.add
-        .rectangle(DESIGN_WIDTH / 2, 670, DESIGN_WIDTH - 80, 410, 0x000000, 0.55)
-        .setOrigin(0.5)
-        .setDepth(20)
-        .setScrollFactor(1); // в мировом пространстве (двигается с камерой)
-      const lbl = this.add
-        .text(DESIGN_WIDTH / 2, 670, '⚔  В БОЮ  ⚔', {
-          fontFamily: 'monospace', fontSize: '24px', color: '#ffd27f',
-        })
-        .setOrigin(0.5)
-        .setDepth(21);
-      this.mergeOverlay.setData('label', lbl);
-    } else {
-      if (this.mergeOverlay) {
-        const lbl = this.mergeOverlay.getData('label') as Phaser.GameObjects.Text | undefined;
-        lbl?.destroy();
-        this.mergeOverlay.destroy();
-        this.mergeOverlay = null;
-      }
-    }
   }
 
   // ============================== Battle playback ==============================
@@ -744,10 +1154,14 @@ export class WorldScene extends Phaser.Scene {
 
       let j = i + 1;
       let chainRetreat = false;
+      // Авторитетный «последний step в цепи» (включая carry-wound, который НЕ
+      // продвигает j вперёд). Используется для event-level weaponTierAfter.
+      let lastStepInChain: LaneStep = step;
       while (j < steps.length) {
         const nxt = steps[j];
         if (nxt.kind === 'scrap') {
           stops.push({ kind: 'scrap', step: nxt });
+          lastStepInChain = nxt;
           j++; continue;
         }
         if (nxt.kind === 'chest') break;
@@ -759,23 +1173,38 @@ export class WorldScene extends Phaser.Scene {
         const killedByCarry = hitsNxt === 0 && hpAfterNxt === 0;
         if (killedByCarry) {
           stops.push({ kind: 'target', step: nxt, hpBefore: hpStartNxt, hpAfter: 0, killed: true });
+          lastStepInChain = nxt;
           j++; continue;
         }
+        // Carry-wound — добавляем в цепь как touch-stop (UI decrement за carry contact),
+        // НО j не увеличиваем — outer loop затем обработает nxt step нормально
+        // (wound-events для оставшегося HP + fatal/stuck). Так UI и simulator считают
+        // одинаковое число «ударов»: 1 за carry contact + N за follow-up удары.
         stops.push({
           kind: 'target', step: nxt, hpBefore: hpStartNxt,
           hpAfter: hpStartNxt - carryInNxt, killed: false,
         });
+        lastStepInChain = nxt;
         chainRetreat = true;
-        if (hitsNxt > 0) break;
-        j++; break;
+        break;
       }
 
       events.push({
         kind: 'lunge', stops, retreat: chainRetreat,
-        weaponTierAfter: step.weaponTierAfter,
-        weaponHitsAfter: step.weaponHitsAfter,
+        weaponTierAfter: lastStepInChain.weaponTierAfter,
+        weaponHitsAfter: lastStepInChain.weaponHitsAfter,
       });
-      i = j;
+      // `i = j - 1` (вместо `i = j`): outer for++ переведёт на j-th step, чтобы он
+      // обработался нормально. Это:
+      //   • При chain-break-on-chest → chest получит свой 'chest' event (раньше
+      //     пропускался — был баг).
+      //   • При chain-break-on-no-carryIn target → этот следующий target получит
+      //     wound/fatal events.
+      //   • При carry-wound (j не двигается) → nxt step обработается с wound-events
+      //     для добивающих ударов в while-loop симулятора.
+      // Уже-consumed карри-kill steps пропускаются автоматически через
+      // `if (hits === 0)` ветку выше.
+      i = j - 1;
     }
 
     // Если линия закончилась рывком с retreat=true и больше событий нет — полный возврат.
@@ -802,7 +1231,14 @@ export class WorldScene extends Phaser.Scene {
 
   private finishLane(_li: number): void {
     this.lanesDone += 1;
-    if (this.lanesDone >= this.level!.cols) this.showResult();
+    if (this.lanesDone >= this.level!.cols) {
+      // Пауза 2с — дать игроку посмотреть на открытые сундуки и их содержимое
+      // до появления модалки результата. На skip эта задержка пропускается.
+      this.time.delayedCall(2000, () => {
+        if (this.resultShown) return;
+        this.showResult();
+      });
+    }
   }
 
   private walkTime(distance: number): number {
@@ -818,7 +1254,8 @@ export class WorldScene extends Phaser.Scene {
     if (stops.length === 0) { onDone(); return; }
 
     const startY = fighter.y;
-    const endY = this.obstacleY(stops[stops.length - 1].step.index);
+    // [EXP: zombie-movement] цель — ТЕКУЩАЯ Y последнего стопа (зомби мог сдвинуться).
+    const endY = this.getObstacleCurrentY(li, stops[stops.length - 1].step.index);
     const distance = Math.abs(startY - endY);
     const walk = this.walkTime(distance);
     const span = Math.max(1, distance);
@@ -831,8 +1268,12 @@ export class WorldScene extends Phaser.Scene {
       duration: walk,
       onComplete: () => {
         if (this.resultShown) return;
+        // Финальный sync: оружие могло переключиться (текущее исчерпано → активировано
+        // следующее). `ev.weaponTierAfter` — снимок после ВСЕХ шагов этого lunge.
+        // Для chain carry-kill это берётся от последнего consumed step (см. buildLaneEvents).
+        // Для wound-lunge (не убил) — undefined, sync пропускаем.
         if (ev.weaponTierAfter !== undefined) {
-          this.updateFighterWeapon(li, ev.weaponTierAfter, ev.weaponHitsAfter);
+          this.syncFighterWeapon(li, ev.weaponTierAfter, ev.weaponHitsAfter);
         }
         if (ev.fullRetreat) {
           this.returnFighterOffscreen(li, onDone);
@@ -852,19 +1293,43 @@ export class WorldScene extends Phaser.Scene {
       },
     });
 
-    // Мгновенные эффекты по пути.
+    // Мгновенные эффекты по пути. На каждом TARGET stop'е decrement hits на 1 —
+    // синхронно с applyHpSnap, чтобы цифра под бойцом обновлялась прямо в момент удара
+    // (а не только в конце всего lunge'а). [EXP: zombie-movement] — stopY текущая.
     for (const stop of stops) {
-      const stopY = this.obstacleY(stop.step.index);
+      const stopY = this.getObstacleCurrentY(li, stop.step.index);
       const t = (Math.abs(stopY - startY) / span) * walk;
       this.time.delayedCall(t, () => {
         if (this.resultShown) return;
         if (stop.kind === 'target') {
           this.applyHpSnap(li, stop);
+          this.decrementFighterHit(li);
         } else {
           this.popText(fighter.x, stopY, `+${stop.step.scrap}`, '#9fe870');
         }
       });
     }
+  }
+
+  /** Decrement локального счётчика hits (один stop = один удар = один hit). Не уходим
+   *  ниже 0; финальный sync на новое оружие делает `syncFighterWeapon` из onComplete. */
+  private decrementFighterHit(li: number): void {
+    this.fighterHitsRemaining[li] = Math.max(0, (this.fighterHitsRemaining[li] ?? 0) - 1);
+    this.updateFighterWeapon(li, this.fighterTierShown[li] || undefined, this.fighterHitsRemaining[li]);
+  }
+
+  /** Авторитетный sync с снимком симулятора — ПЕРЕКЛЮЧАЕТ tier (и ресурс) ТОЛЬКО при
+   *  смене тира (оружие исчерпано → активировано следующее). Если тир тот же — ресурс
+   *  не переписываем: per-stop `decrementFighterHit` уже отвечает за актуальное значение
+   *  (и оно совпадает с симулятором благодаря 1:1 балансу stops↔hits). Иначе sync
+   *  затирает local decrement и UI «прыгает» вверх между двумя событиями. */
+  private syncFighterWeapon(li: number, tier: number, hits?: number): void {
+    const currentTier = this.fighterTierShown[li];
+    if (tier !== currentTier) {
+      this.fighterTierShown[li] = tier;
+      this.fighterHitsRemaining[li] = hits ?? 0;
+    }
+    this.updateFighterWeapon(li, this.fighterTierShown[li], this.fighterHitsRemaining[li]);
   }
 
   private applyHpSnap(li: number, t: StopTarget): void {
@@ -881,6 +1346,9 @@ export class WorldScene extends Phaser.Scene {
       hpText?.setText(String(hpAfter));
     }
     if (token) {
+      // [EXP: zombie-movement] stun до конца backstep'a бойца — зомби не наступает,
+      // пока боец откатывается, потом снова начинает идти.
+      token.setData('stunnedUntil', this.time.now + ZOMBIE_STUN_MS);
       this.tweens.add({ targets: token, alpha: 0.55, yoyo: true, duration: 90 });
     }
 
@@ -916,13 +1384,17 @@ export class WorldScene extends Phaser.Scene {
       onComplete: () => {
         if (this.resultShown) return;
         this.openChest(li);
-        this.popText(fighter.x, this.chestRowY, 'СУНДУК', '#ffd700');
         if (ev.weaponTierAfter !== undefined) {
-          this.updateFighterWeapon(li, ev.weaponTierAfter, ev.weaponHitsAfter);
+          this.syncFighterWeapon(li, ev.weaponTierAfter, ev.weaponHitsAfter);
         }
         this.time.delayedCall(this.CHEST_PAUSE, () => {
           if (this.resultShown) return;
-          this.returnFighterOffscreen(li, onDone);
+          // Боец остаётся возле сундука — ждёт, пока все остальные линии завершатся.
+          // Лёгкий idle-bounce, чтобы было видно, что он «живой» и ждёт.
+          this.tweens.add({
+            targets: fighter, scaleY: 0.92, yoyo: true, duration: 420, repeat: -1,
+          });
+          onDone();
         });
       },
     });
@@ -939,7 +1411,8 @@ export class WorldScene extends Phaser.Scene {
   private playStuck(li: number, ev: StuckEvent, onDone: () => void): void {
     if (this.resultShown) { onDone(); return; }
     const fighter = this.fighters[li];
-    const stuckY = this.obstacleY(ev.step.index);
+    // [EXP: zombie-movement] — догоняем текущую Y, зомби мог приблизиться.
+    const stuckY = this.getObstacleCurrentY(li, ev.step.index);
     const startY = fighter.y;
     const distance = Math.abs(startY - stuckY);
     const walk = this.walkTime(distance);
@@ -951,7 +1424,11 @@ export class WorldScene extends Phaser.Scene {
         if (this.resultShown) return;
         this.popText(fighter.x, stuckY, 'отступ', '#ff8a8a');
         if (ev.weaponTierAfter !== undefined) {
-          this.updateFighterWeapon(li, ev.weaponTierAfter, ev.weaponHitsAfter);
+          this.syncFighterWeapon(li, ev.weaponTierAfter, ev.weaponHitsAfter);
+        } else {
+          // Совсем кончилось оружие (depleted): tier=0, hits=0 → updateFighterWeapon
+          // покажет '—' и серый ring.
+          this.syncFighterWeapon(li, 0, 0);
         }
         this.returnFighterOffscreen(li, onDone);
       },
@@ -1002,7 +1479,81 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private openChest(li: number): void {
-    this.chestTokens[li]?.setFillStyle(0x7be37b);
+    const chest = this.chestTokens[li];
+    if (!chest) return;
+    const lid = chest.getData('lid') as Phaser.GameObjects.Rectangle | undefined;
+    const body = chest.getData('body') as Phaser.GameObjects.Rectangle | undefined;
+    body?.setFillStyle(0xf2c63a);
+    if (lid) {
+      // Крышка отлетает вверх и наклоняется.
+      this.tweens.add({
+        targets: lid,
+        y: lid.y - 26,
+        angle: -28,
+        duration: 260,
+        ease: 'Back.Out',
+      });
+    }
+    // Лёгкий «pop» всего сундука.
+    this.tweens.add({ targets: chest, scale: 1.12, yoyo: true, duration: 160 });
+    this.renderChestContent(li);
+  }
+
+  /** Показывает содержимое сундука над ним (висит до конца уровня).
+   *  Рендерит САМ предмет: плитку оружия / лутбокс / стопку лома — а не текстовую плашку. */
+  private renderChestContent(li: number): void {
+    const lane = this.level!.lanes[li];
+    const chestDef = lane.chest;
+    const x = this.colCenterX(li);
+    const size = 54;
+    const y = this.chestRowY - size / 2 - 18; // над сундуком, отступ ~18px
+
+    const container = this.add.container(x, y).setDepth(15);
+    let fillColor = 0x888888;
+    let labelTxt = '';
+    let labelColor = '#ffffff';
+    let strokeColor = 0x000000;
+    let strokeAlpha = 0.4;
+    let labelFontFactor = 0.5;
+
+    if (chestDef.reward === 'scrap') {
+      // Стопка лома: серая плитка + «+N» зелёным.
+      fillColor = 0x6b7785;
+      labelTxt = `+${chestDef.scrap ?? 0}`;
+      labelColor = '#9fe870';
+      labelFontFactor = 0.4;
+    } else if (chestDef.reward === 'weapon') {
+      // Плитка оружия в стиле мердж-поля: цвет по тиру + цифра тира.
+      const t = chestDef.weaponTier ?? 1;
+      fillColor = TIER_COLORS[t] ?? 0x888888;
+      labelTxt = String(t);
+    } else if (chestDef.reward === 'lootbox') {
+      // Лутбокс: фиолетовый/жёлтый квадрат с эмодзи 📦.
+      const isElite = chestDef.lootboxKind === 'elite';
+      fillColor = isElite ? 0x9b59b6 : 0xd4a017;
+      labelTxt = '📦';
+      strokeColor = 0xffffff;
+      strokeAlpha = 0.7;
+      labelFontFactor = 0.6;
+    }
+
+    const bg = this.add
+      .rectangle(0, 0, size, size, fillColor)
+      .setOrigin(0.5)
+      .setStrokeStyle(3, strokeColor, strokeAlpha);
+    const label = this.add
+      .text(0, 0, labelTxt, {
+        fontFamily: 'monospace',
+        fontSize: `${Math.round(size * labelFontFactor)}px`,
+        color: labelColor,
+      })
+      .setOrigin(0.5);
+    label.setStroke('#000000', 3);
+    container.add([bg, label]);
+
+    container.setScale(0);
+    this.tweens.add({ targets: container, scale: 1, duration: 240, ease: 'Back.Out' });
+    this.battleNodes.push(container);
   }
 
   private popText(x: number, y: number, msg: string, color: string): void {
@@ -1086,7 +1637,8 @@ export class WorldScene extends Phaser.Scene {
       x: cx, y: cy + 150, width: 360, height: 80, label: 'НА БАЗУ', fontSize: 30,
       onClick: () => this.returnToBase(),
     });
-    back.container.setScrollFactor(0).setDepth(152);
+    back.setScrollFactor(0);
+    back.setDepth(152);
 
     this.resultNodes.push(dim, panel, titleText, linesText, back.container);
   }
@@ -1103,12 +1655,13 @@ export class WorldScene extends Phaser.Scene {
     this.fighterTierTexts = [];
     this.fighterHitsTexts = [];
     this.fighterRings = [];
+    this.fighterTierShown = [];
+    this.fighterHitsRemaining = [];
     this.chestTokens = [];
     this.obTokens = [];
     this.obBars = [];
     this.obBarBgs = [];
     this.obHpTexts = [];
-    this.gateHalves = [];
 
     // 3) Убрать speed/skip HUD.
     if (this.skipBtn) { this.skipBtn.destroy(); this.skipBtn = null; }
@@ -1127,18 +1680,34 @@ export class WorldScene extends Phaser.Scene {
       onUpdate: () => { /* ensure cam refresh */ },
     });
 
-    // 5) Восстановить мердж-плитки (state мог измениться — лутбоксы).
+    // 4b) Закрыть ворота (figma-арт) + тени — вернуть створки и их тени в исходные позиции.
+    for (const id of ['base.gate_l', 'base.gate_l_shd', 'base.gate_r', 'base.gate_r_shd']) {
+      const obj = this.baseLocation?.byId.get(id);
+      if (!obj) continue;
+      const def = obj.getData('defaultX');
+      if (typeof def === 'number') {
+        this.tweens.add({ targets: obj, x: def, duration: 600, ease: 'Sine.InOut' });
+      }
+    }
+
+    // 5) Восстановить мердж-плитки (state мог измениться — лутбоксы + восстановленное оружие).
+    //    relayout пересоздаёт ВСЕ плитки visible — отдельный show не нужен.
     this.board.relayout(getState().field);
+    // Поле может вырасти, но позиции inv/trash фиксированы из figma — не пересчитываем.
     this.inv.rebuild();
     this.hud.refresh();
-    this.dimMergeBoard(false);
 
-    // 6) Mode = base.
+    // 6) Mode = base. Возвращаем UI базы.
     this.mode = 'base';
     this.resultShown = false;
     this.lanesDone = 0;
     this.level = null;
     this.result = null;
+    this.mainUI.setBottomVisible(true);
+    this.gradientTop?.setVisible(true);
+    this.gradientBot?.setVisible(true);
+    this.invPlaceArt?.setVisible(true);
+    this.trashPlaceArt?.setVisible(true);
     this.refreshButtons();
   }
 

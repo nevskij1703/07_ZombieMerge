@@ -412,6 +412,44 @@ export function initDevPanel(game: Phaser.Game): void {
   };
   autoTab.append(runAutoBtn, copyAutoBtn, autoStatus, autoSummary, ...chartCanvases);
 
+  // --- Вкладка «Layout» (визуальный редактор расположения) ---
+  const layoutTab = makeTab('layout', 'Layout');
+  const layoutHint = document.createElement('div');
+  layoutHint.textContent =
+    'Включает drag/resize-редактор элементов локации (Base) и UI. Изменения сохраняются в LocalStorage, можно экспортировать в JSON.';
+  css(layoutHint, 'color:#9aa0a6;margin-bottom:8px;font-size:11px;line-height:1.4;');
+  layoutTab.append(layoutHint);
+
+  const editorStatus = document.createElement('div');
+  css(editorStatus, 'margin:4px 0 8px;color:#cfe9ff;');
+  editorStatus.textContent = 'Редактор: ВЫКЛ';
+
+  const toggleEditorBtn = btn('Включить редактор', 'zm-layout-toggle');
+  toggleEditorBtn.onclick = () => {
+    // Достаём WorldScene и его layoutEditor (он создаётся в WorldScene.create в dev).
+    const sc = game.scene.getScene('World') as Phaser.Scene & {
+      layoutEditor?: { toggle: () => void; isEnabled: () => boolean };
+    };
+    if (!sc || !sc.layoutEditor) {
+      editorStatus.textContent = 'Редактор недоступен (сцена не готова).';
+      return;
+    }
+    sc.layoutEditor.toggle();
+    const on = sc.layoutEditor.isEnabled();
+    toggleEditorBtn.textContent = on ? 'Выключить редактор' : 'Включить редактор';
+    editorStatus.textContent = on ? 'Редактор: ВКЛ — drag/select на сцене' : 'Редактор: ВЫКЛ';
+  };
+
+  const resetLayoutBtn = btn('Сбросить ВСЕ overrides', 'zm-layout-reset');
+  css(resetLayoutBtn, resetLayoutBtn.style.cssText.replace('#2e7d32', '#b23b3b'));
+  resetLayoutBtn.onclick = () => {
+    if (!confirm('Сбросить ВСЕ overrides расположения? Перезагрузить страницу для применения.')) return;
+    localStorage.removeItem('zm_layout_overrides');
+    editorStatus.textContent = 'Overrides сброшены. Перезагрузи страницу.';
+  };
+
+  layoutTab.append(toggleEditorBtn, resetLayoutBtn, editorStatus);
+
   // показать первую вкладку
   tabs.res.style.display = 'block';
 

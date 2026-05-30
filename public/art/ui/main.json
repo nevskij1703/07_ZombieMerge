@@ -1,0 +1,24 @@
+{
+  "format": "figma-layout-1",
+  "frame": { "width": 720, "height": 1280 },
+  "comment": "UI главного экрана (figma 158:63). Слои = top-left coords в системе экрана. Используется только для preload (tilesets) — реальная позиционная логика в Hud/MainScreenUI.",
+  "tilesets": [
+    { "image": "settings", "width": 56, "height": 67 },
+    { "image": "coin", "width": 37, "height": 37 },
+    { "image": "profile", "width": 44, "height": 53 },
+    { "image": "upgrade", "width": 55, "height": 47 },
+    { "image": "arrows", "width": 28, "height": 35 },
+    { "image": "cards", "width": 64, "height": 54 },
+    { "image": "shop", "width": 63, "height": 51 },
+    { "image": "fight", "width": 39, "height": 38 },
+    { "image": "trash_place", "width": 98, "height": 113 },
+    { "image": "inv_place", "width": 100, "height": 125 }
+  ],
+  "svgs": [
+    { "image": "btn_brown", "width": 94, "height": 98 },
+    { "image": "btn_green", "width": 252, "height": 123 },
+    { "image": "btn_yellow", "width": 180, "height": 70 },
+    { "image": "merge_slot", "width": 136, "height": 136 }
+  ],
+  "layers": []
+}

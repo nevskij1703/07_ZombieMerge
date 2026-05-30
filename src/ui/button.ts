@@ -63,6 +63,22 @@ export class Button {
     this.container.setPosition(x, y);
   }
 
+  /** Зеркалит scrollFactor на контейнер И на детей. Нужно для UI поверх боя:
+   *  container.setScrollFactor(0) фиксирует визуал, но дочерний bgRect для input
+   *  hit-test продолжает считать мировые координаты (Phaser gotcha) — без этого
+   *  клик мимо при cam.scrollY != 0. */
+  setScrollFactor(v: number): void {
+    this.container.setScrollFactor(v);
+    this.bgRect.setScrollFactor(v);
+    this.label.setScrollFactor(v);
+  }
+
+  /** Удобный chain-helper: вернуть `this` для цепочки в стиле `.setScrollFactor(0).setDepth(100)`. */
+  setDepth(d: number): Button {
+    this.container.setDepth(d);
+    return this;
+  }
+
   destroy(): void {
     this.container.destroy();
   }

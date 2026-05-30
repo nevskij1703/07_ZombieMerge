@@ -16,6 +16,10 @@ export interface BoardCallbacks {
   /** Drop оружия в зону мусорки. Получатель удаляет из state.field и возвращает true,
    *  если удаление состоялось (для перерисовки + анимации). */
   onTrash?: (cellIndex: number) => boolean;
+  /** Вызывается при создании доски и при `relayout` (рост поля). Получает реальный
+   *  прямоугольник фона (`outerBounds`) — поле может быть `Не` квадратным (2×3, 3×4,
+   *  4×5), bg адаптируется под форму. Сцена должна перерисовать merge-ground. */
+  onLayoutChanged?: (outer: BoardRect) => void;
 }
 
 export interface BoardRect {
@@ -49,8 +53,15 @@ export class MergeBoard {
   private cellSize = 0;
   private gridLeft = 0;
   private gridTop = 0;
+  // Реальные размеры фона мердж-поля (адаптируются под форму field — 2×3, 3×4, 4×5).
+  // `outerLeft/outerTop` — top-left bg; `outerW/outerH` включают padding вокруг сетки.
+  private outerLeft = 0;
+  private outerTop = 0;
+  private outerW = 0;
+  private outerH = 0;
 
-  private cellRects: Phaser.GameObjects.Rectangle[] = [];
+  /** Фон ячеек: Image (ui.merge_slot SVG) если есть текстура, иначе Rectangle-fallback. */
+  private cellRects: Phaser.GameObjects.GameObject[] = [];
   private tileByIndex = new Map<number, Phaser.GameObjects.Container>();
   private selectedIndex: number | null = null;
 
@@ -67,6 +78,7 @@ export class MergeBoard {
     this.rect = rect;
     this.cb = cb;
     this.computeGeometry();
+    this.cb.onLayoutChanged?.(this.getOuterBounds());
     this.buildCells();
     this.rebuildTiles();
     this.attachInput();
@@ -77,16 +89,39 @@ export class MergeBoard {
     this.trashZone = rect;
   }
 
+  /** Текущий визуальный размер ячейки поля в px. Меняется при relayout (рост поля). */
+  getCellSize(): number {
+    return this.cellSize;
+  }
+
   /** Перепривязать к (возможно новому) полю и перерисовать — например после роста поля. */
   relayout(field: FieldState): void {
     this.field = field;
     this.clearSelection();
     this.resetGesture();
     this.computeGeometry();
+    this.cb.onLayoutChanged?.(this.getOuterBounds());
     this.cellRects.forEach((r) => r.destroy());
     this.cellRects = [];
     this.buildCells();
     this.rebuildTiles();
+  }
+
+  /** Реальный bg-прямоугольник: учитывает форму поля (для не-квадратных размеров — узкий
+   *  или невысокий относительно исходного rect'а). Сцена использует его для отрисовки
+   *  merge-ground. */
+  getOuterBounds(): BoardRect {
+    return { x: this.outerLeft, y: this.outerTop, w: this.outerW, h: this.outerH };
+  }
+
+  /** Скрыть визуал ОРУЖЕЙНЫХ плиток (лутбоксы остаются видимыми). Используется на старте
+   *  боя — «бойцы забрали оружие». State не трогается; после боя `relayout(field)`
+   *  пересоздаст плитки и оружие появится снова. */
+  hideWeaponTiles(): void {
+    this.clearSelection();
+    for (const [, tile] of this.tileByIndex) {
+      if (!tile.getData('lootbox')) tile.setVisible(false);
+    }
   }
 
   // --- Ввод на уровне сцены ---
@@ -273,10 +308,28 @@ export class MergeBoard {
 
   private computeGeometry(): void {
     const { cols, rows } = this.field;
-    this.pitch = Math.min(this.rect.w / cols, this.rect.h / rows);
-    this.cellSize = this.pitch * 0.9;
-    this.gridLeft = this.rect.x + (this.rect.w - this.pitch * cols) / 2;
-    this.gridTop = this.rect.y + (this.rect.h - this.pitch * rows) / 2;
+    // Cell size = по «бОльшей» оси field (max(cols,rows)) с учётом padding/gap. Это даёт
+    // ОДИНАКОВЫЙ cellSize для любого field с тем же max-измерением (например 4×5 и 5×5
+    // имеют одинаковые ячейки), а сам bg сужается по короткой оси:
+    //   • 2×3 (maxDim=3, как 3×3) → cellSize ≈ 136, bg ≈ 309×449
+    //   • 3×4 (maxDim=4, как 4×4) → cellSize ≈ 101, bg ≈ 344×449
+    //   • 4×5 (maxDim=5, как 5×5) → cellSize ≈ 80,  bg ≈ 365×449
+    const padding = 16;
+    const gap = 4;
+    const baseMinDim = Math.min(this.rect.w, this.rect.h);
+    const maxDim = Math.max(cols, rows);
+    this.cellSize = (baseMinDim - 2 * padding - gap * (maxDim - 1)) / maxDim;
+    this.pitch = this.cellSize + gap;
+    const totalW = cols * this.cellSize + (cols - 1) * gap;
+    const totalH = rows * this.cellSize + (rows - 1) * gap;
+    // Outer bg = totalW/H + padding вокруг.
+    this.outerW = totalW + 2 * padding;
+    this.outerH = totalH + 2 * padding;
+    // Центрируем bg в исходном rect.
+    this.outerLeft = this.rect.x + (this.rect.w - this.outerW) / 2;
+    this.outerTop = this.rect.y + (this.rect.h - this.outerH) / 2;
+    this.gridLeft = this.outerLeft + padding;
+    this.gridTop = this.outerTop + padding;
   }
 
   private centerOf(index: number): { x: number; y: number } {
@@ -290,13 +343,24 @@ export class MergeBoard {
 
   private buildCells(): void {
     const total = this.field.cols * this.field.rows;
+    const hasSlotArt = this.scene.textures.exists('ui.merge_slot');
     for (let i = 0; i < total; i++) {
       const c = this.centerOf(i);
-      const r = this.scene.add
-        .rectangle(c.x, c.y, this.cellSize, this.cellSize, UI.slot)
-        .setOrigin(0.5);
-      r.setStrokeStyle(2, UI.slotStroke);
-      this.cellRects.push(r);
+      if (hasSlotArt) {
+        // figma slot 136×136 с rx=17. setDisplaySize масштабирует под текущий cellSize.
+        const img = this.scene.add
+          .image(c.x, c.y, 'ui.merge_slot')
+          .setOrigin(0.5)
+          .setDisplaySize(this.cellSize, this.cellSize)
+          .setDepth(1);
+        this.cellRects.push(img);
+      } else {
+        const r = this.scene.add
+          .rectangle(c.x, c.y, this.cellSize, this.cellSize, UI.slot)
+          .setOrigin(0.5);
+        r.setStrokeStyle(2, UI.slotStroke);
+        this.cellRects.push(r);
+      }
     }
   }
 
@@ -342,6 +406,7 @@ export class MergeBoard {
 
     const tile = this.scene.add.container(c.x, c.y, [bg, tierTxt, nameTxt]);
     tile.setData('bg', bg);
+    tile.setDepth(10); // поверх слотов-фонов (depth=1)
     return tile;
   }
 
@@ -369,6 +434,7 @@ export class MergeBoard {
     const tile = this.scene.add.container(c.x, c.y, [bg, icon, lbl]);
     tile.setData('bg', bg);
     tile.setData('lootbox', kind);
+    tile.setDepth(10); // поверх слотов-фонов (depth=1)
     return tile;
   }
 }

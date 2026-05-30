@@ -18,6 +18,14 @@ function clampTier(t: number): WeaponTier {
   return Math.max(1, Math.min(maxTier(), Math.round(t)));
 }
 
+/** Fisher-Yates shuffle in-place, использующая переданный rng. Детерминирована. */
+function shuffleInPlace<T>(arr: T[], rng: () => number): void {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [arr[i], arr[j]] = [arr[j]!, arr[i]!];
+  }
+}
+
 /** Случайный выбор по нормализованным весам. */
 function weightedPick<T extends string>(rng: () => number, weights: Record<T, number>): T {
   const keys = Object.keys(weights) as T[];
@@ -47,11 +55,14 @@ export function generateLevel(level: number, ctx?: LevelGenContext): Level {
   const roadLength = Math.round(
     b.levelGen.baseRoadLength + b.levelGen.roadLengthPerLevel * (level - 1),
   );
-  const baseZombieCount = Math.max(
+  // По тз: длина дорог всех линий ОДИНАКОВА → одинаковое число препятствий per lane.
+  // Зомби — фиксированное число. Кучи лома — сэмплятся ОДНОКРАТНО на уровень (одинаково
+  // для всех линий). Коробка — ЗАМЕНЯЕТ зомби (не добавляет), длина не сдвигается.
+  const zombieCount = Math.max(
     1,
     Math.round(b.levelGen.baseZombieCount + b.levelGen.zombieCountPerLevel * (level - 1)),
   );
-  const spread = b.levelGen.laneDifficultySpread ?? 0;
+  const pilesCount = rint(rng, b.levelGen.scrapPilesMin, b.levelGen.scrapPilesMax);
   // Если контекста нет (например, autotest без передачи) — используем разумные дефолты:
   // workshop=1, best=1. Это упрощает миграцию вызовов.
   const playerCtx: LevelGenContext = {
@@ -61,11 +72,7 @@ export function generateLevel(level: number, ctx?: LevelGenContext): Level {
 
   const lanes: Lane[] = [];
   for (let c = 0; c < cols; c++) {
-    // Множитель сложности этой линии — детерминированно из seed-rng, разный для каждой линии и
-    // уровня. Так игрок не угадает «крайняя левая всегда лёгкая» и не разложит оружие шаблонно.
-    const factor = spread > 0 ? 1 + (rng() * 2 - 1) * spread : 1;
-    const laneZombies = Math.max(1, Math.round(baseZombieCount * factor));
-    lanes.push(genLane(b, rng, level, laneZombies, playerCtx));
+    lanes.push(genLane(b, rng, level, zombieCount, pilesCount, playerCtx));
   }
   // Гарантия из тз: на L1 минимум N типов зомби (по дефолту 3) должны быть видны.
   // Если рандом не дал нужное разнообразие — досвопаем «дубликаты» в недостающие тиры.
@@ -167,6 +174,7 @@ function genLane(
   rng: () => number,
   level: number,
   zombieCount: number,
+  pilesCount: number,
   playerCtx: LevelGenContext,
 ): Lane {
   // Сэмплируем тир для каждого зомби в линии.
@@ -175,32 +183,41 @@ function genLane(
     tiers.push(sampleZombieTier(b, rng, level));
   }
 
-  // Sort-with-jitter: лёгкие в начале, тяжёлые в конце, но границы «дышат».
+  // Anchored shuffle: делим отсортированную выборку на 3 примерно равные зоны
+  // weak/mid/strong. Внутри средней и сильной зон — Fisher-Yates перемешка
+  // → финальная позиция линии 50/50 может оказаться топ или предтоп (как просит ТЗ).
+  // Слабая зона в начале — порядок сохраняется (онбординг боя). Распределение тиров
+  // НЕ меняется — общая сложность та же, что давал sampleZombieTier.
   tiers.sort((a, c) => a - c);
-  const jitter = b.levelGen.zombieOrderJitter ?? 0;
-  const positioned = tiers.map((tier, i) => ({
-    tier,
-    pos: i + (jitter > 0 ? (rng() - 0.5) * 2 * jitter : 0),
-  }));
-  positioned.sort((a, c) => a.pos - c.pos);
+  const n = tiers.length;
+  const startCount = Math.max(1, Math.ceil(n / 3));
+  const endCount = Math.min(Math.max(1, Math.ceil(n / 3)), Math.max(0, n - startCount));
+  const midCount = Math.max(0, n - startCount - endCount);
+  const weakGroup = tiers.slice(0, startCount);
+  const midGroup = tiers.slice(startCount, startCount + midCount);
+  const strongGroup = tiers.slice(startCount + midCount);
+  shuffleInPlace(midGroup, rng);
+  shuffleInPlace(strongGroup, rng);
+  const ordered = [...weakGroup, ...midGroup, ...strongGroup];
 
   const obstacles: Obstacle[] = [];
   let maxZombieHpInLane = 0;
-  for (const item of positioned) {
-    const def = b.zombies[item.tier];
+  for (const t of ordered) {
+    const def = b.zombies[t];
     const hp = def?.hp ?? 1;
     if (hp > maxZombieHpInLane) maxZombieHpInLane = hp;
-    obstacles.push({ kind: 'zombie', zombieTier: item.tier, hp, scrap: 0 });
+    obstacles.push({ kind: 'zombie', zombieTier: t, hp, scrap: 0 });
   }
 
-  // Per-lane: с шансом crateLaneChance — ровно ОДНА коробка, иначе никакой.
-  if (rng() < b.levelGen.crateLaneChance) {
-    const pos = rint(rng, 0, obstacles.length);
+  // Per-lane: с шансом crateLaneChance коробка ЗАМЕНЯЕТ одного зомби (длина линии не растёт).
+  // По тз все линии одной длины — поэтому splice(pos, 1, crate), а не вставка.
+  if (rng() < b.levelGen.crateLaneChance && obstacles.length > 0) {
+    const pos = rint(rng, 0, obstacles.length - 1);
     const givesWeapon = rng() < b.levelGen.crateWeaponChance;
     // По тз: коробка имеет HP в ~2× HP сильнейшего зомби В ЭТОЙ ЛИНИИ (динамически).
     const refHp = maxZombieHpInLane > 0 ? maxZombieHpInLane : (b.zombies[1]?.hp ?? 1);
     const crateHp = Math.max(1, Math.round(refHp * (b.levelGen.crateHpMultiplier ?? 2)));
-    obstacles.splice(pos, 0, {
+    obstacles.splice(pos, 1, {
       kind: 'crate',
       hp: crateHp,
       scrap: b.levelGen.scrapPerPile,
@@ -208,8 +225,8 @@ function genLane(
     });
   }
 
-  const piles = rint(rng, b.levelGen.scrapPilesMin, b.levelGen.scrapPilesMax);
-  for (let i = 0; i < piles; i++) {
+  // Кучи лома: ровно `pilesCount` вставок (одинаковое число на всех линиях уровня).
+  for (let i = 0; i < pilesCount; i++) {
     const pos = rint(rng, 0, obstacles.length);
     obstacles.splice(pos, 0, { kind: 'scrap', hp: 0, scrap: b.levelGen.scrapPerPile });
   }

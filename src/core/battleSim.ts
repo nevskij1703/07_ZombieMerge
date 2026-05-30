@@ -39,9 +39,14 @@ function simulateLane(lane: Lane, tiers: number[]): LaneResult {
   let collectedScrap = 0;
   const collectedWeapons: WeaponTier[] = [];
   const collectedLootboxes: LootboxKind[] = [];
-  // «Пробивающий» урон: если предыдущий удар нанёс больше HP врага, остаток
-  // переносится на следующее боевое препятствие на этой же линии.
+  // «Серия убивающих ударов» (бывший «пробивающий урон»): если предыдущий удар нанёс
+  // больше HP врага, остаток переносится на следующее препятствие. ВАЖНО: каждый kill в
+  // серии (включая carry-kill) ТРАТИТ 1 hit активного оружия — баланс «один зомби = один
+  // удар», даже если визуально серия выглядит как сквозной проход.
   let carry = 0;
+  // Оружие, чей последний удар создал текущий carry. Если carry-kill потребует списать
+  // hit, берём с него (если ещё есть hits), иначе с `strongestAvailable`.
+  let carryWeapon: ArsenalWeapon | null = null;
 
   const snap = (): { tier?: number; hits?: number } => {
     const w = strongestAvailable(ars);
@@ -78,6 +83,19 @@ function simulateLane(lane: Lane, tiers: number[]): LaneResult {
       carryAbsorbed = Math.min(carry, hp);
       hp -= carryAbsorbed;
       carry -= carryAbsorbed;
+      // ВСЕГДА (kill или wound) carry-contact = +1 удар бойца по новому врагу. Физически
+      // это отдельный «второй удар» в серии (последним пробил предыдущего, этим ударил
+      // следующего). Списываем 1 hit с carryWeapon (если ещё есть ресурс) или с лучшего
+      // доступного. hitsSpent НЕ инкрементируется — wound-events для оставшегося HP
+      // (если carry только ранил) генерируются отдельно из `step.hitsSpent` (while-loop).
+      const payer: ArsenalWeapon | null =
+        carryWeapon && carryWeapon.hits > 0 ? carryWeapon : strongestAvailable(ars);
+      if (payer) {
+        payer.hits -= 1;
+        carryWeapon = payer;
+      }
+      // Если payer == null — оружия нет вовсе. carry уже летел от прошлого удара,
+      // contact «бесплатный». Следующий obstacle упрётся в depleted.
     }
 
     // 2) Бьём, пока враг жив или не кончатся оружия.
@@ -91,6 +109,7 @@ function simulateLane(lane: Lane, tiers: number[]): LaneResult {
       if (dmg >= hp) {
         carry = dmg - hp; // избыток уходит дальше
         hp = 0;
+        carryWeapon = w; // запоминаем кто создал carry — он же платит за следующий kill
       } else {
         hp -= dmg;
       }

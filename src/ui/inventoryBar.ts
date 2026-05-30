@@ -1,75 +1,83 @@
 import Phaser from 'phaser';
-import { TIER_COLORS, UI } from '../config/constants';
 import { getState } from '../core/storage';
 import { isLootboxCode, lootboxKindOfCode } from '../core/lootbox';
 
-export interface InventoryRect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
-const MAX_VISIBLE = 9;
-
-// Буфер переполнения (не-мердж). Тап по предмету -> вынести на свободную клетку поля.
+/**
+ * Инвентарь = бесконечный стек. Одна квадратная ячейка размером ~70% ячейки мердж-поля,
+ * показывает только верх стека (последний добытый). Tap → pop с конца, положить в случайную
+ * свободную клетку поля (`core/merge.ts → pullFromInventory`).
+ *
+ * Все визуалы внутри `container` (origin = центр ячейки). Это позволяет двигать инвентарь
+ * как один объект через LayoutEditor.
+ */
 export class InventoryBar {
+  readonly container: Phaser.GameObjects.Container;
   private readonly scene: Phaser.Scene;
-  private readonly rect: InventoryRect;
-  private readonly onPull: (index: number) => void;
-  private readonly label: Phaser.GameObjects.Text;
-  private items: Phaser.GameObjects.GameObject[] = [];
+  private readonly onPull: () => void;
+  private size = 0;
+  private slot!: Phaser.GameObjects.Rectangle;
+  private slotLabel!: Phaser.GameObjects.Text;
 
-  constructor(scene: Phaser.Scene, rect: InventoryRect, onPull: (index: number) => void) {
+  constructor(scene: Phaser.Scene, cx: number, cy: number, size: number, onPull: () => void) {
     this.scene = scene;
-    this.rect = rect;
     this.onPull = onPull;
-    scene.add.rectangle(rect.x + rect.w / 2, rect.y + rect.h / 2, rect.w, rect.h, UI.hudBg).setOrigin(0.5);
-    this.label = scene.add.text(rect.x + 10, rect.y + 6, '', {
-      fontFamily: 'monospace',
-      fontSize: '18px',
-      color: '#9aa0a6',
-    });
+    this.size = size;
+    this.container = scene.add.container(cx, cy);
+    this.build();
     this.rebuild();
   }
 
+  /** Пересоздать визуал на новом размере/позиции (вызывается при relayout поля). */
+  relayout(cx: number, cy: number, size: number): void {
+    this.container.setPosition(cx, cy);
+    this.size = size;
+    this.slot.destroy();
+    this.slotLabel.destroy();
+    this.build();
+    this.rebuild();
+  }
+
+  destroy(): void {
+    this.container.destroy();
+  }
+
+  private build(): void {
+    // Прозрачный rect — нужен для interactive hit-area, но не рисует свою рамку
+    // поверх инвентарного PNG-арта в WorldScene.
+    this.slot = this.scene.add
+      .rectangle(0, 0, this.size, this.size, 0x000000, 0)
+      .setOrigin(0.5);
+    this.slot.setInteractive({ useHandCursor: true });
+    this.slot.on('pointerup', () => this.onPull());
+    this.slotLabel = this.scene.add
+      .text(0, 0, '', {
+        fontFamily: 'monospace',
+        fontSize: `${Math.round(this.size * 0.5)}px`,
+        color: '#ffffff',
+      })
+      .setOrigin(0.5);
+    this.slotLabel.setStroke('#000000', 3);
+    this.container.add([this.slot, this.slotLabel]);
+    this.container.setSize(this.size, this.size);
+  }
+
   rebuild(): void {
-    this.items.forEach((o) => o.destroy());
-    this.items = [];
-
     const inv = getState().inventory;
-    this.label.setText(`Инвентарь (${inv.length})`);
-
-    const size = this.rect.h * 0.6;
-    const gap = 8;
-    const startX = this.rect.x + 12;
-    const y = this.rect.y + this.rect.h - size / 2 - 8;
-    const count = Math.min(inv.length, MAX_VISIBLE);
-
-    for (let i = 0; i < count; i++) {
-      const v = inv[i];
-      const x = startX + i * (size + gap) + size / 2;
-      const lbKind = lootboxKindOfCode(v);
-      const isLb = isLootboxCode(v);
-      const color = isLb ? (lbKind === 'elite' ? 0x9b59b6 : 0xd4a017) : TIER_COLORS[v] ?? 0x888888;
-      const bg = this.scene.add.rectangle(x, y, size, size, color).setOrigin(0.5);
-      bg.setStrokeStyle(2, isLb ? 0xffffff : 0x000000, isLb ? 0.6 : 0.3);
-      const label = isLb ? '📦' : String(v);
-      const txt = this.scene.add
-        .text(x, y, label, { fontFamily: 'monospace', fontSize: `${Math.round(size * (isLb ? 0.5 : 0.4))}px`, color: '#ffffff' })
-        .setOrigin(0.5);
-      txt.setStroke('#000000', 3);
-      bg.setInteractive({ useHandCursor: true });
-      bg.on('pointerup', () => this.onPull(i));
-      this.items.push(bg, txt);
+    if (inv.length === 0) {
+      // Пусто — ничего не показываем поверх инвентарного арта.
+      this.slotLabel.setText('');
+      this.slot.disableInteractive();
+      return;
     }
-
-    if (inv.length > MAX_VISIBLE) {
-      const x = startX + MAX_VISIBLE * (size + gap) + size / 2;
-      const more = this.scene.add
-        .text(x, y, `+${inv.length - MAX_VISIBLE}`, { fontFamily: 'monospace', fontSize: '18px', color: '#cccccc' })
-        .setOrigin(0.5);
-      this.items.push(more);
-    }
+    const top = inv[inv.length - 1] as number;
+    const isLb = isLootboxCode(top);
+    this.slotLabel.setText(isLb ? '📦' : `T${top}`);
+    // Цвет лейбла по тиру (для оружия) или белый (для лутбокса) — узнаваемо поверх арта.
+    const lbKind = lootboxKindOfCode(top);
+    const color = isLb
+      ? lbKind === 'elite' ? '#ffd27f' : '#d8a8ff'
+      : '#ffffff';
+    this.slotLabel.setColor(color);
+    this.slot.setInteractive({ useHandCursor: true });
   }
 }

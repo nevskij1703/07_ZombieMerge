@@ -15,3 +15,6 @@ Thumbs.db
 
 # local git worktrees (Claude Code)
 .claude/worktrees/
+
+# local user backups / scratch
+MyFiles/

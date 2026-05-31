@@ -59,7 +59,7 @@ const FIGHTER_PICKUP_Y = 580;
 
 // ============================ Battle tuning =====================================
 
-const FIGHTER_WALK_SPEED = 0.21;       // px/ms forward (×0.5 от прошлого — общее замедление)
+const FIGHTER_WALK_SPEED = 0.3;        // px/ms forward
 const FIGHTER_BACKSTEP_SPEED = 0.275;  // быстрее, чем walk
 const FIGHTER_RETREAT_SPEED = 0.30;    // самая высокая (бежит на базу)
 const ATTACK_RANGE = 14;               // дистанция attack contact (px между center'ами)

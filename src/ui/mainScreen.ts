@@ -80,10 +80,31 @@ function makePressOverlay(scene: Phaser.Scene, w: number, h: number): Phaser.Gam
   return scene.add.rectangle(0, 0, w, h, 0x000000, 0.2).setOrigin(0.5).setVisible(false);
 }
 
-/** Цвет лейбла кнопки в disabled-state (тёмно-серый, читаемо но явно «неактивно»). */
-const DISABLED_LABEL_COLOR = '#555555';
-/** Tint bg-кнопки в disabled-state — десатурация ближе к серому. */
-const DISABLED_BG_TINT = 0x808080;
+/**
+ * Применить «выключенный» вид ко всему контейнеру кнопки через PreFX ColorMatrix
+ * (Phaser 3.60+):
+ *   • `grayscale(1)`  — полностью убирает цвет (зелёный/коричневый/жёлтый bg → серый);
+ *   • `brightness(0.55)` — затемняет ниже среднего, чтобы кнопка явно читалась как
+ *     неактивная даже на фоне base-локации.
+ *
+ * Это нужно вместо `setTint(0x808080)`, потому что tint = МУЛЬТИПЛИКАТИВНОЕ затемнение,
+ * и зелёный × серый = тёмно-зелёный, а не серый. ColorMatrix фактически десатурирует.
+ *
+ * Применяется к контейнеру → одной операцией обесцвечивает и bg, и контент, и оверлей.
+ * preFX undefined в Canvas-режиме — `?.` спокойно скипнет.
+ */
+function applyDisabledFx(container: Phaser.GameObjects.Container): void {
+  if (!container.preFX) return;
+  container.preFX.clear();
+  const cm = container.preFX.addColorMatrix();
+  cm.grayscale(1);
+  cm.brightness(0.55);
+}
+
+/** Снять disabled-эффект — вернуть кнопку к её обычным цветам. */
+function clearDisabledFx(container: Phaser.GameObjects.Container): void {
+  container.preFX?.clear();
+}
 
 export class MainScreenUI {
   readonly btnProfile: UiButton;
@@ -205,22 +226,14 @@ export class MainScreenUI {
       setEnabled: (e: boolean) => {
         this.btnProduce.enabled = e;
         if (e) {
-          produceBg.clearTint();
-          this.produceLabel.setColor('#FFFFFF').setStroke('#000000', 1);
-          this.produceCostText.setColor('#FFFFFF').setStroke('#000000', 1);
-          this.produceWeaponIcon.clearTint();
-          this.produceWeaponTier.setColor('#B7916B');
-          arrowsIcon.clearTint();
-          produceCoin.clearTint();
+          clearDisabledFx(produceContainer);
+          this.produceLabel.setStroke('#000000', 1);
+          this.produceCostText.setStroke('#000000', 1);
         } else {
-          produceBg.setTint(DISABLED_BG_TINT);
-          this.produceLabel.setColor(DISABLED_LABEL_COLOR).setStroke('#000000', 0);
-          this.produceCostText.setColor(DISABLED_LABEL_COLOR).setStroke('#000000', 0);
-          // Иконку оружия и tier-цифру десатурируем тинтом тоже.
-          this.produceWeaponIcon.setTint(DISABLED_BG_TINT);
-          this.produceWeaponTier.setColor(DISABLED_LABEL_COLOR);
-          arrowsIcon.setTint(DISABLED_BG_TINT);
-          produceCoin.setTint(DISABLED_BG_TINT);
+          applyDisabledFx(produceContainer);
+          // Stroke на тексте убираем — figma явно говорит «текст без обводки» в disabled.
+          this.produceLabel.setStroke('#000000', 0);
+          this.produceCostText.setStroke('#000000', 0);
         }
       },
     };
@@ -272,15 +285,9 @@ export class MainScreenUI {
       enabled: true,
       setEnabled: (e: boolean) => {
         btn.enabled = e;
-        if (e) {
-          bg.clearTint();
-          lbl.setColor('#773F17');
-          icon.clearTint();
-        } else {
-          bg.setTint(DISABLED_BG_TINT);
-          lbl.setColor(DISABLED_LABEL_COLOR);
-          icon.setTint(DISABLED_BG_TINT);
-        }
+        if (e) clearDisabledFx(container);
+        else applyDisabledFx(container);
+        // У маленьких кнопок stroke на label не используется — менять нечего.
       },
     };
     attachPressEffect(bg, contentLayer, overlay, 6, () => btn.enabled);
@@ -318,14 +325,11 @@ export class MainScreenUI {
       setEnabled: (e: boolean) => {
         btn.enabled = e;
         if (e) {
-          bg.clearTint();
-          lbl.setColor('#5C2F0D').setStroke('#FFD17C', 1);
-          icon.clearTint();
+          clearDisabledFx(container);
+          lbl.setStroke('#FFD17C', 1);
         } else {
-          bg.setTint(DISABLED_BG_TINT);
-          // Тёмно-серый текст БЕЗ обводки — по описанию figma disabled.
-          lbl.setColor(DISABLED_LABEL_COLOR).setStroke('#000000', 0);
-          icon.setTint(DISABLED_BG_TINT);
+          applyDisabledFx(container);
+          lbl.setStroke('#FFD17C', 0); // обводку убираем в disabled
         }
       },
     };

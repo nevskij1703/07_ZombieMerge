@@ -29,7 +29,8 @@ export function laneArsenals(field: FieldState): WeaponTier[][] {
  *  Правила (см. balance.dynamicDifficulty):
  *  • ratio ≥ strongChestRatio:
  *      strongStreak++; weakStreak=0.
- *      Если strongStreak ≥ strongStreakTrigger (default 3) → mult *= nerfStep (0.7).
+ *      Если strongStreak ≥ strongStreakTrigger (default 1) → mult *= nerfStep (0.7).
+ *      По дефолту триггер срабатывает с 1-го strong-уровня.
  *  • reached == 0:
  *      weakStreak++; strongStreak=0; mult *= buffStep (1.5).  (срабатывает с 1-го раза)
  *  • иначе:

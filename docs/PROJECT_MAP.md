@@ -207,7 +207,7 @@ Render layers (depth scheme):
 
 ### Dynamic difficulty (подкрутка наград от силы игрока)
 - `balance.dynamicDifficulty.strongChestRatio` (0.8) — порог «strong» уровня (reached/total).
-- `balance.dynamicDifficulty.strongStreakTrigger` (3) — после скольких подряд strong-уровней начинается нерф.
+- `balance.dynamicDifficulty.strongStreakTrigger` (1) — после скольких подряд strong-уровней начинается нерф. Default 1 = с 1-го раза, симметрично buff.
 - `balance.dynamicDifficulty.nerfStep` (0.7) — мультипликатор за каждый nerf-tick (-30%).
 - `balance.dynamicDifficulty.buffStep` (1.5) — мультипликатор за каждый weak-уровень (+50%, с 1-го раза).
 - `balance.dynamicDifficulty.multMin/Max` (0.1 / 10.0) — clamp для `state.rewardMultiplier`.

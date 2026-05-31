@@ -93,6 +93,21 @@ export function getFieldSize(level: number): { cols: number; rows: number } {
   return { cols: chosen.cols, rows: chosen.rows };
 }
 
+/** Следующий шаг расширения поля после текущего (cols, rows). Используется для раннего
+ *  апгрейда (pendingFieldUpgrade): когда у игрока есть оружие тира ≥ cols×rows, не ждём
+ *  level-threshold, а сразу переходим к next step. Если текущий размер уже максимальный
+ *  или не совпадает ни с одним step'ом — возвращает null. */
+export function nextFieldSize(cols: number, rows: number): { cols: number; rows: number } | null {
+  const steps = getBalance().field.steps;
+  for (let i = 0; i < steps.length - 1; i++) {
+    if (steps[i].cols === cols && steps[i].rows === rows) {
+      const next = steps[i + 1];
+      return { cols: next.cols, rows: next.rows };
+    }
+  }
+  return null;
+}
+
 export function generateLevel(level: number, ctx?: LevelGenContext): Level {
   const rawBalance = getBalance();
   const b = scaleBalance(rawBalance, ctx?.rewardMultiplier ?? 1.0);

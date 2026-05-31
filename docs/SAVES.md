@@ -8,11 +8,11 @@
 - Поле **`schemaVersion`** (целое) — отдельно от versionName приложения. Растёт **только** при изменении формата `data`.
 - `getCurrentSchemaVersion()` авто-выводится из `max(Object.keys(migrations))` — **не дублируется** константой.
 
-## Форма сейва (schemaVersion 2)
+## Форма сейва (schemaVersion 3)
 
 ```jsonc
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "scrap": 0,            // металлолом (софт-валюта)
   "diamonds": 0,         // хард-валюта — зарезервировано, мета отложена
   "level": 1,            // текущий уровень (1-based)
@@ -28,13 +28,17 @@
   // v2: динамическая подкрутка наград (см. balance.dynamicDifficulty + progression.ts).
   "rewardMultiplier": 1.0,  // 1.0=нейтрально. <1=nerf (силён), >1=buff (слаб). [multMin..multMax]
   "strongStreak": 0,        // подряд уровней с ratio ≥ strongChestRatio (default 0.8)
-  "weakStreak": 0           // подряд уровней с reached==0
+  "weakStreak": 0,          // подряд уровней с reached==0
+  // v3: ранний апгрейд мердж-поля. Ставится в applyBattleResult если у игрока есть
+  // оружие тира ≥ cols×rows; на СЛЕДУЮЩЕМ уровне форсирует переход к next field step.
+  "pendingFieldUpgrade": false
 }
 ```
 
 ### Миграции
 
 - **v1 → v2**: добавлены `rewardMultiplier` (default 1.0), `strongStreak`, `weakStreak` (оба 0). Defensive — у старых сейвов поля проставляются нейтральными значениями, прогресс не теряется.
+- **v2 → v3**: добавлено `pendingFieldUpgrade` (default false). Defensive.
 
 ## Контракт
 

@@ -52,6 +52,10 @@ export interface SaveState {
   strongStreak: number;
   /** Сколько уровней подряд игрок открыл 0 сундуков. На каждом таком уровне → buff. */
   weakStreak: number;
+  /** Флаг раннего апгрейда мердж-поля. Ставится в applyBattleResult если у игрока есть
+   *  оружие с тиром ≥ cols×rows текущего поля. На СЛЕДУЮЩЕМ завершённом уровне форсирует
+   *  переход к следующему размеру поля (вместо ожидания level-based threshold). */
+  pendingFieldUpgrade: boolean;
 }
 
 // --- Уровень / бой ---

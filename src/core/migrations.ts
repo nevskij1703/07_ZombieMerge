@@ -15,6 +15,14 @@ export const migrations: Record<number, MigrationFn> = {
     strongStreak: typeof state?.strongStreak === 'number' ? state.strongStreak : 0,
     weakStreak: typeof state?.weakStreak === 'number' ? state.weakStreak : 0,
   }),
+  // v2 -> v3: добавили pendingFieldUpgrade для раннего расширения мердж-поля
+  // когда у игрока есть оружие с тиром ≥ cols×rows.
+  3: (state) => ({
+    ...state,
+    pendingFieldUpgrade: typeof state?.pendingFieldUpgrade === 'boolean'
+      ? state.pendingFieldUpgrade
+      : false,
+  }),
 };
 
 export function getCurrentSchemaVersion(): number {

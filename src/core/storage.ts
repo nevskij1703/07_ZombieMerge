@@ -23,6 +23,7 @@ export function DEFAULT_STATE(): SaveState {
     rewardMultiplier: 1.0,
     strongStreak: 0,
     weakStreak: 0,
+    pendingFieldUpgrade: false,
   };
 }
 

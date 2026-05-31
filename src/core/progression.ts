@@ -3,7 +3,7 @@
 import type { SaveState, BattleResult, FieldState, WeaponTier } from '../types';
 import { maxTier } from './weapons';
 import { resizeField, placeFirstFree } from './merge';
-import { getFieldSize } from './levelGen';
+import { getFieldSize, nextFieldSize } from './levelGen';
 import { getBalance } from './balanceRuntime';
 import { isWeaponCellValue, lootboxCode } from './lootbox';
 
@@ -94,10 +94,31 @@ export function applyBattleResult(state: SaveState, result: BattleResult): void 
       state.workshopTier = Math.min(maxTier(), state.workshopTier + 1);
     }
 
-    const size = getFieldSize(state.level);
-    if (size.cols !== state.field.cols || size.rows !== state.field.rows) {
-      const overflow = resizeField(state.field, size.cols, size.rows);
+    // === Размер поля: ранний апгрейд (pendingFieldUpgrade) vs level-based threshold. ===
+    // Берём ЛИБО стандартный размер по уровню, ЛИБО next-step если поднят флаг — макс из двух.
+    // Никогда не shrink'аем (если current уже больше — оставляем как есть).
+    const stdSize = getFieldSize(state.level);
+    let targetSize: { cols: number; rows: number } = stdSize;
+    if (state.pendingFieldUpgrade) {
+      const early = nextFieldSize(state.field.cols, state.field.rows);
+      if (early && early.cols * early.rows > targetSize.cols * targetSize.rows) {
+        targetSize = early;
+      }
+      state.pendingFieldUpgrade = false;
+    }
+    if (targetSize.cols * targetSize.rows > state.field.cols * state.field.rows) {
+      const overflow = resizeField(state.field, targetSize.cols, targetSize.rows);
       for (const t of overflow) state.inventory.push(t);
+    }
+
+    // === Триггер раннего апгрейда: лучшее оружие игрока ≥ cols×rows нового поля. ===
+    // Флаг сработает на СЛЕДУЮЩЕМ завершённом уровне. Каскадирование возможно: если после
+    // расширения оружие всё ещё ≥ cells (например T12 на 2×2 → 2×3 → 3×3 → ...), флаг
+    // выставится снова и продолжит расширять поле по одному шагу за уровень.
+    const currentBest = bestWeaponTier(state);
+    const cells = state.field.cols * state.field.rows;
+    if (currentBest >= cells) {
+      state.pendingFieldUpgrade = true;
     }
   }
 }

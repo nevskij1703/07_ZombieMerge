@@ -1161,9 +1161,9 @@ export class WorldScene extends Phaser.Scene {
       });
 
       let j = i + 1;
-      let chainRetreat = false;
-      // Авторитетный «последний step в цепи» (включая carry-wound, который НЕ
-      // продвигает j вперёд). Используется для event-level weaponTierAfter.
+      // «Последний consumed step» (для event-level weaponTierAfter). Carry-wound
+      // в chain НЕ включается — он будет обработан outer loop'ом как обычный step,
+      // у него своя цепочка wound-events с актуальным sync в onComplete.
       let lastStepInChain: LaneStep = step;
       while (j < steps.length) {
         const nxt = steps[j];
@@ -1184,35 +1184,27 @@ export class WorldScene extends Phaser.Scene {
           lastStepInChain = nxt;
           j++; continue;
         }
-        // Carry-wound — добавляем в цепь как touch-stop (UI decrement за carry contact),
-        // НО j не увеличиваем — outer loop затем обработает nxt step нормально
-        // (wound-events для оставшегося HP + fatal/stuck). Так UI и simulator считают
-        // одинаковое число «ударов»: 1 за carry contact + N за follow-up удары.
-        stops.push({
-          kind: 'target', step: nxt, hpBefore: hpStartNxt,
-          hpAfter: hpStartNxt - carryInNxt, killed: false,
-        });
-        lastStepInChain = nxt;
-        chainRetreat = true;
+        // Carry-wound — НЕ включаем в chain stops. Просто break, чтобы outer
+        // while-loop в следующей итерации обработал nxt step нормально (как
+        // обычный target с carryIn → его wound + fatal/stuck events). Так
+        // simulator (carry contact = 1 hit, follow-up = N hits) и UI (только
+        // wound + fatal stops = N + 1) считают одинаково (carry contact уже
+        // отражён в первом wound через hpAfterCarry).
         break;
       }
 
       events.push({
-        kind: 'lunge', stops, retreat: chainRetreat,
+        kind: 'lunge', stops,
+        // Если в цепи был carry-wound — boец «упёрся» (retreat). Если только kills —
+        // боец продолжает в следующее событие без backstep'a.
+        retreat: false,
         weaponTierAfter: lastStepInChain.weaponTierAfter,
         weaponHitsAfter: lastStepInChain.weaponHitsAfter,
       });
-      // `i = j - 1` (вместо `i = j`): outer for++ переведёт на j-th step, чтобы он
-      // обработался нормально. Это:
-      //   • При chain-break-on-chest → chest получит свой 'chest' event (раньше
-      //     пропускался — был баг).
-      //   • При chain-break-on-no-carryIn target → этот следующий target получит
-      //     wound/fatal events.
-      //   • При carry-wound (j не двигается) → nxt step обработается с wound-events
-      //     для добивающих ударов в while-loop симулятора.
-      // Уже-consumed карри-kill steps пропускаются автоматически через
-      // `if (hits === 0)` ветку выше.
-      i = j - 1;
+      // `i = j;` — это while-loop, ручной advance к first unconsumed step.
+      // (ИСТОРИЧЕСКИЙ БАГ: `i = j - 1;` создавал infinite loop при carry-wound,
+      // потому что j не двигалось при carry-wound break → i стояло на месте.)
+      i = j;
     }
 
     // Если линия закончилась рывком с retreat=true и больше событий нет — полный возврат.

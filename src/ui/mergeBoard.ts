@@ -424,21 +424,17 @@ export class MergeBoard {
       children.push(tierTxt, nameTxt);
     }
 
-    // Цифра тира в правом нижнем углу — стиль из Figma 164:49 «Tier-index»:
-    //   Inter Black 900, 28px при cellSize 136 → ≈ 0.21 × cellSize, минимум 14 для
-    //   читаемости. White + stroke 1px black + shadow (0, 1, black) — даёт чёткую
-    //   подложку из самого текста без отдельной плашки.
+    // Цифра тира в правом нижнем углу: чистая надпись без обводки/тени,
+    // Inter Black 900 32px, цвет #B7916B (тёплый коричневый — единый под всю палитру).
     const badgeOffset = this.cellSize * 0.35;
     const tierBadge = this.scene.add
       .text(badgeOffset, badgeOffset, String(tier), {
         fontFamily: 'Inter, Roboto, Arial Black, sans-serif',
         fontStyle: '900',
-        fontSize: `${Math.max(14, Math.round(this.cellSize * 0.21))}px`,
-        color: '#ffffff',
+        fontSize: '32px',
+        color: '#B7916B',
       })
       .setOrigin(0.5);
-    tierBadge.setStroke('#000000', 1);
-    tierBadge.setShadow(0, 1, '#000000', 0, false, true);
     children.push(tierBadge);
 
     const tile = this.scene.add.container(c.x, c.y, children);

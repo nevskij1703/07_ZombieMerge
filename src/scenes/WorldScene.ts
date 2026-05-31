@@ -397,57 +397,83 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private tickFighterWalking(lane: LaneRuntime, dt: number, now: number): void {
-    // Если активное оружие исчерпано — пытаемся переключиться, иначе retreat.
-    if (!lane.active || lane.active.hits <= 0) {
-      if (!this.switchWeapon(lane)) {
-        lane.state = 'retreating';
+    // Пытаемся убедиться что есть активное оружие. Если активное исчерпано —
+    // переключаемся. Если арсенал пуст, остаёмся БЕЗ оружия (`hasWeapon=false`).
+    const hasWeapon = (lane.active != null && lane.active.hits > 0)
+      || this.switchWeapon(lane);
+
+    const targetIdx = this.findNextLiveObstacle(lane);
+
+    // === БЕЗ оружия ============================================================
+    // Лом — собираем (instant credit). Сундук — открываем. Zombie/crate — идём к нему
+    // до столкновения, потом retreat (бить нечем).
+    if (!hasWeapon) {
+      if (targetIdx === null) {
+        this.walkOrOpenChest(lane, dt);
         return;
       }
-    }
-
-    // Ближайшее живое препятствие.
-    const targetIdx = this.findNextLiveObstacle(lane);
-    if (targetIdx === null) {
-      // Препятствий больше нет — идём к сундуку.
-      const dist = lane.fighter.y - lane.chestY;
-      if (dist <= CHEST_APPROACH_DIST) {
-        this.openChestForLane(lane);
+      const ob = lane.obs[targetIdx];
+      const obY = (ob.token as Phaser.GameObjects.GameObject & { y: number }).y;
+      const dist = lane.fighter.y - obY;
+      if (ob.kind === 'scrap') {
+        this.tryPickupScrap(lane, ob, obY, dist, dt);
+        return;
+      }
+      // zombie/crate ahead — collision → retreat.
+      if (dist <= ATTACK_RANGE) {
+        lane.state = 'retreating';
         return;
       }
       lane.fighter.y -= FIGHTER_WALK_SPEED * dt;
       return;
     }
 
+    // === С оружием =============================================================
+    if (targetIdx === null) {
+      this.walkOrOpenChest(lane, dt);
+      return;
+    }
     const ob = lane.obs[targetIdx];
     const obY = (ob.token as Phaser.GameObjects.GameObject & { y: number }).y;
     const dist = lane.fighter.y - obY;
 
-    // Лом на земле — instant credit в state.scrap (не ждём попапа результата).
-    // В попапе он НЕ показывается и НЕ выдаётся повторно — `lane.scrapCollected`
-    // считает только scrap из коробок/сундуков.
     if (ob.kind === 'scrap') {
-      if (dist <= ATTACK_RANGE + 4) {
-        const amount = ob.scrap;
-        update((st) => { st.scrap += amount; });
-        save();
-        this.hud.refresh();
-        this.popText(lane.fighter.x, obY, `+${amount}`, '#9fe870');
-        ob.token.destroy();
-        ob.dead = true;
-      } else {
-        lane.fighter.y -= FIGHTER_WALK_SPEED * dt;
-      }
+      this.tryPickupScrap(lane, ob, obY, dist, dt);
       return;
     }
-
-    // Zombie/crate.
+    // zombie/crate — подойти и ударить.
     if (dist > ATTACK_RANGE) {
       lane.fighter.y -= FIGHTER_WALK_SPEED * dt;
       return;
     }
-
-    // На дистанции удара — бьём.
     this.attackObstacle(lane, targetIdx, now);
+  }
+
+  /** Подобрать лом при контакте: instant credit в state.scrap, не в попап. */
+  private tryPickupScrap(
+    lane: LaneRuntime, ob: ObRuntime, obY: number, dist: number, dt: number,
+  ): void {
+    if (dist <= ATTACK_RANGE + 4) {
+      const amount = ob.scrap;
+      update((st) => { st.scrap += amount; });
+      save();
+      this.hud.refresh();
+      this.popText(lane.fighter.x, obY, `+${amount}`, '#9fe870');
+      ob.token.destroy();
+      ob.dead = true;
+    } else {
+      lane.fighter.y -= FIGHTER_WALK_SPEED * dt;
+    }
+  }
+
+  /** Идти к сундуку и открыть при достижении (когда впереди живых препятствий нет). */
+  private walkOrOpenChest(lane: LaneRuntime, dt: number): void {
+    const dist = lane.fighter.y - lane.chestY;
+    if (dist <= CHEST_APPROACH_DIST) {
+      this.openChestForLane(lane);
+      return;
+    }
+    lane.fighter.y -= FIGHTER_WALK_SPEED * dt;
   }
 
   /** Один удар активным оружием: -1 hit, -dmg HP. Если убил — продолжаем, если ранил —

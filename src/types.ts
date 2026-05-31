@@ -8,8 +8,9 @@ export type WeaponTier = number;
  *  промежуточные — равномерно. */
 export type ZombieTier = number;
 
-/** Типы лутбоксов из сундуков. medium — около произв. тира, elite — около лучшего у игрока. */
-export type LootboxKind = 'medium' | 'elite';
+/** Типы лутбоксов из сундуков. cheap — на 0-3 тира ниже workshop, medium — среднее между
+ *  workshop и best, elite — на 0-2 тира ниже best (самого крутого у игрока). */
+export type LootboxKind = 'cheap' | 'medium' | 'elite';
 
 /** Что выпадает из сундука. Ровно ОДНО за сундук. */
 export type ChestRewardKind = 'scrap' | 'weapon' | 'lootbox';

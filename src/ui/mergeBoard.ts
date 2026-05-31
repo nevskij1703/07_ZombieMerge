@@ -790,29 +790,41 @@ export class MergeBoard {
     return tile;
   }
 
-  /** Плитка-лутбокс. Отличается цветом и подписью; тапом превращается в оружие. */
+  /** Плитка-лутбокс. Рисуется как PNG-иконка `ui.lootbox_<kind>` (cheap/medium/elite),
+   *  с fallback на цветной квадратик если текстура не загружена. Тапом превращается
+   *  в оружие (см. onOpenLootbox). */
   private makeLootboxTile(index: number, kind: LootboxKind): Phaser.GameObjects.Container {
     const c = this.centerOf(index);
     const size = this.cellSize * 0.92;
-    const color = kind === 'elite' ? 0x9b59b6 : 0xd4a017; // фиолетовый / золото
-    const label = kind === 'elite' ? 'КРУТ' : 'СР.';
+    const texKey = `ui.lootbox_${kind}`;
+    const children: Phaser.GameObjects.GameObject[] = [];
 
-    const bg = this.scene.add.rectangle(0, 0, size, size, color).setOrigin(0.5);
-    bg.setStrokeStyle(3, 0xffffff, 0.6);
-    const icon = this.scene.add
-      .text(0, -size * 0.14, '📦', { fontFamily: 'monospace', fontSize: `${Math.round(size * 0.36)}px` })
-      .setOrigin(0.5);
-    const lbl = this.scene.add
-      .text(0, size * 0.28, label, {
-        fontFamily: 'monospace',
-        fontSize: `${Math.round(size * 0.16)}px`,
-        color: '#ffffff',
-      })
-      .setOrigin(0.5);
-    lbl.setStroke('#000000', 3);
+    if (this.scene.textures.exists(texKey)) {
+      // Иконка с aspect ratio 1:1 (PNG-ассеты квадратные).
+      const img = this.scene.add.image(0, 0, texKey).setOrigin(0.5);
+      img.setDisplaySize(size, size);
+      children.push(img);
+    } else {
+      // Fallback: цветной квадратик + emoji + подпись.
+      const color = kind === 'elite' ? 0x9b59b6 : kind === 'medium' ? 0xd4a017 : 0x8a6a3a;
+      const label = kind === 'elite' ? 'КРУТ' : kind === 'medium' ? 'СР.' : 'ДЕШ.';
+      const bg = this.scene.add.rectangle(0, 0, size, size, color).setOrigin(0.5);
+      bg.setStrokeStyle(3, 0xffffff, 0.6);
+      const icon = this.scene.add
+        .text(0, -size * 0.14, '📦', { fontFamily: 'monospace', fontSize: `${Math.round(size * 0.36)}px` })
+        .setOrigin(0.5);
+      const lbl = this.scene.add
+        .text(0, size * 0.28, label, {
+          fontFamily: 'monospace',
+          fontSize: `${Math.round(size * 0.16)}px`,
+          color: '#ffffff',
+        })
+        .setOrigin(0.5);
+      lbl.setStroke('#000000', 3);
+      children.push(bg, icon, lbl);
+    }
 
-    const tile = this.scene.add.container(c.x, c.y, [bg, icon, lbl]);
-    tile.setData('bg', bg);
+    const tile = this.scene.add.container(c.x, c.y, children);
     tile.setData('lootbox', kind);
     tile.setDepth(10); // поверх слотов-фонов (depth=1)
     return tile;

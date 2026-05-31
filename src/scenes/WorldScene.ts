@@ -709,7 +709,22 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
-    // Scrap / lootbox / weapon-fallback: цветной квадратик с подписью.
+    // Lootbox-награда: рисуем PNG-иконку ui.lootbox_<kind> поверх контейнера.
+    // Если ассет не найден — fallback на цветной квадрат с 📦.
+    if (chestDef.reward === 'lootbox' && chestDef.lootboxKind) {
+      const texKey = `ui.lootbox_${chestDef.lootboxKind}`;
+      if (this.textures.exists(texKey)) {
+        const img = this.add.image(0, 0, texKey).setOrigin(0.5);
+        img.setDisplaySize(size, size);
+        container.add(img);
+        container.setScale(0);
+        this.tweens.add({ targets: container, scale: 1, duration: 240, ease: 'Back.Out' });
+        this.battleNodes.push(container);
+        return;
+      }
+    }
+
+    // Scrap / lootbox-fallback / weapon-fallback: цветной квадратик с подписью.
     let fillColor = 0x888888;
     let labelTxt = '';
     let labelColor = '#ffffff';
@@ -727,8 +742,8 @@ export class WorldScene extends Phaser.Scene {
       fillColor = TIER_COLORS[t] ?? 0x888888;
       labelTxt = String(t);
     } else if (chestDef.reward === 'lootbox') {
-      const isElite = chestDef.lootboxKind === 'elite';
-      fillColor = isElite ? 0x9b59b6 : 0xd4a017;
+      const kind = chestDef.lootboxKind;
+      fillColor = kind === 'elite' ? 0x9b59b6 : kind === 'medium' ? 0xd4a017 : 0x8a6a3a;
       labelTxt = '📦';
       strokeColor = 0xffffff;
       strokeAlpha = 0.7;
@@ -1088,9 +1103,13 @@ export class WorldScene extends Phaser.Scene {
     }).setOrigin(0.5).setScrollFactor(0).setDepth(152);
 
     const reached = result.lanes.filter((l) => l.reachedChest).length;
+    const lbCheap = result.totalLootboxes.filter((k) => k === 'cheap').length;
     const lbMid = result.totalLootboxes.filter((k) => k === 'medium').length;
     const lbElite = result.totalLootboxes.filter((k) => k === 'elite').length;
-    const lbLine = lbMid + lbElite > 0 ? `Лутбоксы: ${lbMid} ср. / ${lbElite} кр.` : 'Лутбоксы: —';
+    const lbTotal = lbCheap + lbMid + lbElite;
+    const lbLine = lbTotal > 0
+      ? `Лутбоксы: ${lbCheap} деш. / ${lbMid} ср. / ${lbElite} кр.`
+      : 'Лутбоксы: —';
     const lines = [
       `Дошло бойцов: ${reached} / ${result.lanes.length}`,
       `Металлолом: +${result.totalScrap}`,
@@ -1545,7 +1564,8 @@ export class WorldScene extends Phaser.Scene {
     update((st) => {
       st.field.cells[cellIndex] = tier;
     });
-    this.toast(`Открыт ${kind === 'elite' ? 'крутой' : 'средний'} лутбокс: T${tier} ${weaponName(tier)}`);
+    const lbName = kind === 'elite' ? 'крутой' : kind === 'medium' ? 'средний' : 'дешманский';
+    this.toast(`Открыт ${lbName} лутбокс: T${tier} ${weaponName(tier)}`);
     return true;
   }
 

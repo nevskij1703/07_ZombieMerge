@@ -25,9 +25,11 @@ export interface LevelGenContext {
  *   • chest.scrapMin/Max (награда scrap-сундука) — × mult.
  *   • chest.rewardWeights.weapon и .lootbox — × mult (scrap-вес не трогаем). weightedPick
  *     нормирует → nerf (mult<1) поднимает шанс scrap-награды, buff — шанс weapon/lootbox.
- *   • lootbox.mediumShare — внутри lootbox-наград сдвигаем долю elite vs medium.
- *     elite-доля = (1 - mediumShare) × mult, clamp[0..1]. mediumShare = 1 - eliteShare.
- *     buff: больше elite (крутых) лутбоксов. nerf: почти все medium (обычные). */
+ *   • lootbox.shares — внутри lootbox-наград смещаем «куда падает кривая»:
+ *       cheapW  = base.cheap  / mult       (mult>1 → меньше cheap;  mult<1 → больше cheap)
+ *       mediumW = base.medium               (середина — якорь, не двигаем)
+ *       eliteW  = base.elite  * mult       (mult>1 → больше elite; mult<1 → меньше elite)
+ *     После нормализации сумма = 1. При mult=1 пропорции не меняются. */
 function scaleBalance(b: Balance, mult: number): Balance {
   if (!mult || mult === 1.0) return b;
   const scaledScrapPerPile = Math.max(1, Math.round(b.levelGen.scrapPerPile * mult));
@@ -36,9 +38,17 @@ function scaleBalance(b: Balance, mult: number): Balance {
     scaledChestScrapMin,
     Math.round(b.chest.scrapMax * mult),
   );
-  const baseEliteShare = 1 - b.lootbox.mediumShare;
-  const scaledEliteShare = Math.max(0, Math.min(1, baseEliteShare * mult));
-  const scaledMediumShare = 1 - scaledEliteShare;
+  // Sharres для 3 типов лутбоксов: cheap÷mult / medium / elite×mult, normalize.
+  const safeMult = Math.max(mult, 1e-3);
+  const baseS = b.lootbox.shares;
+  const cheapW = baseS.cheap / safeMult;
+  const mediumW = baseS.medium;
+  const eliteW = baseS.elite * safeMult;
+  const sumW = cheapW + mediumW + eliteW;
+  const scaledShares =
+    sumW > 0
+      ? { cheap: cheapW / sumW, medium: mediumW / sumW, elite: eliteW / sumW }
+      : baseS;
   return {
     ...b,
     levelGen: { ...b.levelGen, scrapPerPile: scaledScrapPerPile },
@@ -54,7 +64,7 @@ function scaleBalance(b: Balance, mult: number): Balance {
     },
     lootbox: {
       ...b.lootbox,
-      mediumShare: scaledMediumShare,
+      shares: scaledShares,
     },
   };
 }
@@ -310,7 +320,7 @@ function makeChest(b: Balance, rng: () => number, playerCtx: LevelGenContext): C
     const off = rint(rng, b.chest.chestWeaponOffsetMin, b.chest.chestWeaponOffsetMax);
     return { reward, weaponTier: clampTier(playerCtx.workshopTier + off) };
   }
-  // lootbox: medium vs elite по доле mediumShare (4:1 → 0.8)
-  const lootboxKind: LootboxKind = rng() < b.lootbox.mediumShare ? 'medium' : 'elite';
+  // lootbox: cheap / medium / elite — weighted pick по shares.
+  const lootboxKind: LootboxKind = weightedPick(rng, b.lootbox.shares);
   return { reward, lootboxKind };
 }

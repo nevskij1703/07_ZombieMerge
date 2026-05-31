@@ -83,9 +83,24 @@ export class InventoryBar {
     const top = inv[inv.length - 1] as number;
     const isLb = isLootboxCode(top);
     if (isLb) {
-      this.slotLabel.setText('📦');
+      // Лутбокс: PNG-иконка ui.lootbox_<kind> с fallback на 📦-emoji если ассета нет.
       const lbKind = lootboxKindOfCode(top);
-      this.slotLabel.setColor(lbKind === 'elite' ? '#ffd27f' : '#d8a8ff');
+      const texKey = lbKind ? `ui.lootbox_${lbKind}` : '';
+      if (lbKind && this.scene.textures.exists(texKey)) {
+        this.slotLabel.setText('');
+        const target = this.size * 0.85;
+        const icon = this.scene.add
+          .image(0, 0, texKey)
+          .setOrigin(0.5)
+          .setDisplaySize(target, target);
+        this.container.add(icon);
+        this.slotIcon = icon;
+      } else {
+        this.slotLabel.setText('📦');
+        this.slotLabel.setColor(
+          lbKind === 'elite' ? '#ffd27f' : lbKind === 'medium' ? '#d8a8ff' : '#c8b08a',
+        );
+      }
     } else {
       // Оружие: пробуем иконку weapon.t<N>, fallback на текст «T<N>».
       // Масштаб — по эталонному WEAPON_FRAME_PX (фрейм Figma 136px = 272 PNG @ scale 2).

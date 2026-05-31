@@ -68,13 +68,18 @@ export interface ChestReward {
 }
 
 export interface LootboxBalance {
-  /** Доля medium среди выпавших лутбоксов (4:1 = mediumShare 0.8). */
-  mediumShare: number;
-  /** Тир оружия в medium-лутбоксе = workshopTier + uniform[mediumOffsetMin..mediumOffsetMax]. */
+  /** Доли трёх типов лутбоксов среди выпавших (нормализуются перед сэмплингом). */
+  shares: { cheap: number; medium: number; elite: number };
+  /** Cheap-лутбокс: тир = workshopTier + uniform[cheapOffsetMin..cheapOffsetMax].
+   *  По тз: «на 0-3 тира ниже того, что производит игрок» → [-3, 0]. */
+  cheapOffsetMin: number;
+  cheapOffsetMax: number;
+  /** Medium-лутбокс: тир ≈ ⌊(workshop + best) / 2⌋ + uniform[mediumOffsetMin..mediumOffsetMax].
+   *  Центр — среднее между производством игрока и его лучшим оружием; офсет даёт лёгкий разброс. */
   mediumOffsetMin: number;
   mediumOffsetMax: number;
-  /** Тир оружия в elite-лутбоксе = bestTier + uniform[eliteOffsetMin..eliteOffsetMax].
-   *  Отрицательные значения = ниже лучшего тира игрока (всё равно обычно лучше workshop). */
+  /** Elite-лутбокс: тир = bestTier + uniform[eliteOffsetMin..eliteOffsetMax].
+   *  По тз: «на 0-2 тира ниже самого крутого у игрока» → [-2, 0]. */
   eliteOffsetMin: number;
   eliteOffsetMax: number;
 }
@@ -310,13 +315,17 @@ export const balance: Balance = {
   },
 
   lootbox: {
-    // По тз: средние выпадают в 4 раза чаще крутых → mediumShare = 0.8.
-    mediumShare: 0.8,
-    // «Средние лутбоксы содержат оружие на 0-1 порядок лучше чем производит игрок».
-    mediumOffsetMin: 0,
+    // 3 типа: cheap (часто, оружие близкое к workshop), medium (умеренно, центр между
+    // workshop и best), elite (редко, около best). Дефолт ~40/40/20 — нормализуется
+    // в `scaleBalance` с учётом rewardMultiplier (mult>1 → больше elite, меньше cheap).
+    shares: { cheap: 0.4, medium: 0.4, elite: 0.2 },
+    // Cheap: на 0-3 тира НИЖЕ workshop — «дешманский», но всегда хоть какое-то оружие.
+    cheapOffsetMin: -3,
+    cheapOffsetMax: 0,
+    // Medium: центр = avg(workshop, best); ±1 разброса для разнообразия.
+    mediumOffsetMin: -1,
     mediumOffsetMax: 1,
-    // «Крутые — на 0-2 порядка хуже чем самое крутое у игрока». В большинстве кейсов best >
-    // workshop, так что elite даёт оружие СИЛЬНЕЕ medium — выгодный, но редкий приз.
+    // Elite: на 0-2 тира ниже best (самого крутого оружия у игрока на поле/инвентаре/Цехе).
     eliteOffsetMin: -2,
     eliteOffsetMax: 0,
   },

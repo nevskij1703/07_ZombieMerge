@@ -422,11 +422,16 @@ export class WorldScene extends Phaser.Scene {
     const obY = (ob.token as Phaser.GameObjects.GameObject & { y: number }).y;
     const dist = lane.fighter.y - obY;
 
-    // Лом — забираем при контакте, идём дальше.
+    // Лом на земле — instant credit в state.scrap (не ждём попапа результата).
+    // В попапе он НЕ показывается и НЕ выдаётся повторно — `lane.scrapCollected`
+    // считает только scrap из коробок/сундуков.
     if (ob.kind === 'scrap') {
       if (dist <= ATTACK_RANGE + 4) {
-        lane.scrapCollected += ob.scrap;
-        this.popText(lane.fighter.x, obY, `+${ob.scrap}`, '#9fe870');
+        const amount = ob.scrap;
+        update((st) => { st.scrap += amount; });
+        save();
+        this.hud.refresh();
+        this.popText(lane.fighter.x, obY, `+${amount}`, '#9fe870');
         ob.token.destroy();
         ob.dead = true;
       } else {

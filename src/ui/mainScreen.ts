@@ -36,6 +36,8 @@ interface UiButton {
 const BUTTON_DEPTH = 100;
 const FONT = 'Roboto, Arial Black, sans-serif';
 
+// ============================== Button effect helpers ===========================
+
 /**
  * Press-эффект из figma: верхняя грань кнопки (вместе со ВСЕМ контентом) опускается
  * вниз на `pressDepth` px, толщина 3D-объёма становится нулевой, нижняя граница не
@@ -267,6 +269,8 @@ export class MainScreenUI {
 
     this.refresh();
   }
+
+  // ============================== Button factories ==============================
 
   /** Мелкая кнопка нижнего ряда: SVG-bg + иконка + label по figma. */
   private makeIconButton(

@@ -46,7 +46,7 @@ export const NEW_BADGE_MIN_TIER = 5;
 // Цвет плитки оружия по тиру (1-based; index 0 — заглушка). Палитра — из Figma макета
 // weapon_frame (164:341): цвет берётся с плашки tier-индекса каждого тира. Используется:
 //   • как fallback в `MergeBoard.makeTile` если PNG-рамка не загрузилась;
-//   • для ring-strokeStyle вокруг бойца в бою (`WorldScene.updateFighterWeaponVisual`);
+//   • для ring-strokeStyle вокруг бойца в бою (`FightersController.renderFighterWeapon`);
 //   • для tint placeholder-иконки на кнопке Produce (`MainScreen.refresh`).
 // Палитра повторяется циклом из 8 базовых цветов (figma-дизайнер так задумал, "категории
 // оружия" по 8 тиров): T1 — коричневый (дерево), T2/9/17 — зелёный, T3/11/19 — синий,

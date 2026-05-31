@@ -42,7 +42,7 @@ import { InventoryBar } from '../ui/inventoryBar';
 import { Button } from '../ui/button';
 import { MainScreenUI } from '../ui/mainScreen';
 import { parseLocation, buildLocation, findTileset, type BuiltLocation, type LocationManifest } from '../art/locationLoader';
-import { loadOverrides } from '../editor/layoutOverrides';
+import { loadOverrides, applyOverride } from '../editor/layoutOverrides';
 import { LayoutEditor } from '../editor/layoutEditor';
 
 // ============================ Layout constants =================================
@@ -1312,6 +1312,11 @@ export class WorldScene extends Phaser.Scene {
   private buildBaseRoad(): void {
     this.baseRoadContainer = this.add.container(0, 0).setDepth(-49.5);
     this.baseRoadTopY = this.buildRoadStripe(GATE_Y, 0, false);
+    // base.road не в `layers` манифеста (рендерится динамически здесь), поэтому
+    // locationLoader не накладывает на него built-in manifest-override. Делаем явно,
+    // чтобы команда-настройки (положение/depth) из base.json применялись и к road.
+    const builtin = this.baseManifest?.overrides?.['base.road'];
+    if (builtin) applyOverride(this.baseRoadContainer, builtin);
   }
 
   private buildRoadTiles(): void {

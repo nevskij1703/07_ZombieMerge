@@ -18,13 +18,15 @@
   ],
   "comment_overrides": "Зафиксированные позиции и depth после ручной правки в layout-editor. Применяются ДО пользовательских overrides из LocalStorage (см. locationLoader.buildLocation). depth поднят так, чтобы стены/ворота/лампы были выше дороги/бойцов (которые рисуются на base).",
   "overrides": {
-    "base.gate_r_shd": { "x": 361, "y": 318 },
+    "base.gate_r_shd": { "x": 361, "y": 318, "visible": true },
     "base.gate_l_shd": { "x": 358, "y": 317 },
     "base.wall_l": { "x": 104, "y": 326, "depth": -21 },
     "base.wall_r": { "x": 608, "y": 382, "depth": -10.5 },
     "base.lamp_r": { "x": 539, "y": 152, "depth": -5.25 },
     "base.lamp_l": { "x": 179, "y": 147, "depth": -7.875 },
-    "base.gate_l": { "x": 286, "y": 240 },
-    "base.gate_r": { "x": 434, "y": 240 }
+    "base.gate_l": { "x": 286, "y": 240, "visible": true },
+    "base.gate_r": { "x": 434, "y": 240, "visible": true },
+    "base.road": { "x": 0, "y": -107 },
+    "base.ground": { "depth": -48.25 }
   }
 }

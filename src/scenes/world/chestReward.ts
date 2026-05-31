@@ -79,7 +79,10 @@ export function renderChestContent(
   cx: number,
   chestBaseY: number,
 ): Phaser.GameObjects.Container {
-  const size = 54;
+  // Линейный размер «слота» награды. От него масштабируются ВСЕ внутренние
+  // элементы (weapon-иконка, tier-badge, lootbox PNG, fallback rect, label
+  // шрифт) — поэтому одно число управляет всем визуалом награды.
+  const size = 108;
   // chestBaseY = низ видимого сундука (origin 0.5,1). Сундук растёт ВВЕРХ от
   // chestBaseY на CHEST_DISPLAY_H. Координаты:
   //   • startY (= -35% от высоты сундука): внутри тела, чуть выше середины —

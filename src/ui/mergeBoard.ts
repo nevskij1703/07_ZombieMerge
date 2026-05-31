@@ -426,7 +426,7 @@ export class MergeBoard {
         duration: 110,
         ease: 'Quad.In',
         onComplete: () => {
-          // Phase 5: вспышка и появление newTile.
+          // Phase 5a: центральная вспышка (solid white круг, expand & fade).
           const flash = scene.add
             .circle(toCenter.x, toCenter.y, cs * 0.4, 0xffffff, 0.9)
             .setDepth(60)
@@ -439,6 +439,25 @@ export class MergeBoard {
             duration: 200,
             ease: 'Quad.Out',
             onComplete: () => flash.destroy(),
+          });
+          // Phase 5b: shockwave — кольцо с резким внешним фронтом и мягким
+          // fade к центру. Расширяется от cs*0.4 до cs*2.5 за 380ms.
+          this.ensureShockwaveTexture();
+          const wave = scene.add
+            .image(toCenter.x, toCenter.y, 'merge.shockwave')
+            .setOrigin(0.5)
+            .setDepth(55)
+            .setBlendMode(Phaser.BlendModes.ADD)
+            .setAlpha(0.85);
+          wave.setDisplaySize(cs * 0.4, cs * 0.4);
+          scene.tweens.add({
+            targets: wave,
+            displayWidth: cs * 2.5,
+            displayHeight: cs * 2.5,
+            alpha: 0,
+            duration: 380,
+            ease: 'Quad.Out',
+            onComplete: () => wave.destroy(),
           });
           // Появление новой плитки — только если ещё актуальна (не была
           // подхвачена другим мерджем как `oldToTile` и не destroy'ed).
@@ -459,6 +478,39 @@ export class MergeBoard {
         },
       });
     });
+  }
+
+  /**
+   * Лениво создать текстуру `merge.shockwave` — круглая 512×512 PNG (canvas)
+   * с radial gradient: прозрачный центр → soft fade → яркий peak фронт →
+   * прозрачно за пределами арки. То есть «волновое кольцо» с резкой внешней
+   * гранью и мягким спадом к центру. Используется как Image в Phase 5b VFX.
+   *
+   * Idempotent — повторные вызовы возвращают сразу.
+   */
+  private ensureShockwaveTexture(): void {
+    const KEY = 'merge.shockwave';
+    if (this.scene.textures.exists(KEY)) return;
+    const SIZE = 512;
+    const canvas = document.createElement('canvas');
+    canvas.width = SIZE;
+    canvas.height = SIZE;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const cx = SIZE / 2;
+    const cy = SIZE / 2;
+    const r = SIZE / 2 - 4;
+    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    grad.addColorStop(0.0, 'rgba(255, 255, 255, 0.0)');
+    grad.addColorStop(0.55, 'rgba(255, 255, 255, 0.04)');
+    grad.addColorStop(0.82, 'rgba(255, 255, 255, 0.35)');
+    grad.addColorStop(0.94, 'rgba(255, 255, 255, 1.0)');
+    grad.addColorStop(1.0, 'rgba(255, 255, 255, 0.0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+    this.scene.textures.addCanvas(KEY, canvas);
   }
 
   /** 10 «искр» (ADD-blend белые точки) летят к target с разных радиусов 1.0-1.6 × cellSize. */

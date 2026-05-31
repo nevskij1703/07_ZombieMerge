@@ -53,6 +53,12 @@ const GATE_Y = 440;          // ворота — общая граница ба�
 const FIRST_ZOMBIE_OFFSET = 500;
 const ZOMBIE_SPACING = 64;   // КОНСТАНТНЫЙ шаг между препятствиями (≈ размер токена)
 const CHEST_GAP = 64;        // зазор между самым дальним препятствием и сундуком
+// Idle позиция бойца на базе: между воротами (440) и мердж-полем (555). Бойцы стоят
+// тут когда не в бою (chill).
+const FIGHTER_IDLE_Y = 500;
+// Y «у мердж-поля» — бойцы спускаются сюда чтобы «забрать оружие» в начале боя,
+// затем уже бегут вверх к laneStartY.
+const FIGHTER_PICKUP_Y = 580;
 
 // =========================== [EXP: zombie-movement] ============================
 // Экспериментальная фича: зомби идут к бойцу. Главный switch — если ставить
@@ -185,6 +191,10 @@ export class WorldScene extends Phaser.Scene {
   private obHpTexts: (Phaser.GameObjects.Text | null)[][] = [];
   private battleNodes: Phaser.GameObjects.GameObject[] = []; // teardown list
   private lanesDone = 0;
+  /** Per-lane флаг «событие линии завершено» (boец дошёл до сундука, отступил или
+   *  застрял). Lane считается «done» РАНЬШЕ чем визуальная анимация возврата —
+   *  чтобы попап результата не ждал длинных tween'ов. */
+  private laneCompleted: boolean[] = [];
   private resultShown = false;
   private resultNodes: Phaser.GameObjects.GameObject[] = [];
   private speedButtons: Array<{ btn: Button; factor: number }> = [];
@@ -247,6 +257,9 @@ export class WorldScene extends Phaser.Scene {
     // === HUD/база ===
     this.hud = new Hud(this);
     this.buildBaseUI();
+    // Бойцы persistent — создаём раз в `create()`, стоят на idle Y между воротами и
+    // мердж-полем. При бое анимируются, после боя возвращаются сюда.
+    this.ensureFightersExist();
 
     // Visual editor — фаза 2: регистрируем UI как отдельные элементы.
     if (import.meta.env.DEV && this.layoutEditor) {
@@ -331,6 +344,11 @@ export class WorldScene extends Phaser.Scene {
         if (ob.kind === 'scrap') continue; // лом не двигается, не блокирует
         const tobj = token as Phaser.GameObjects.GameObject & { y: number };
         const currentY = tobj.y;
+        // Коробка не двигается, но БЛОКИРУЕТ зомби позади (упираются в неё).
+        if (ob.kind === 'crate') {
+          upperLimitY = currentY - tokenSize - ZOMBIE_STOP_MARGIN;
+          continue;
+        }
         // Не в видимой зоне → не двигается, но блокирует следующих (они «толпятся» сверху).
         if (currentY < viewTopY || currentY > viewBotY) {
           upperLimitY = currentY - tokenSize - ZOMBIE_STOP_MARGIN;
@@ -694,6 +712,82 @@ export class WorldScene extends Phaser.Scene {
     this.board.setTrashZone(this.trashRect);
   }
 
+  // ============= Idle fighters (на базе перед боем) ===============================
+
+  /** Создать/удалить бойцов под текущий field.cols. Бойцы persistent через бой —
+   *  стоят на базе на Y=FIGHTER_IDLE_Y в режиме `base`, при `goBattle` оживают через
+   *  pickup-anim, после `returnToBase` возвращаются на idle Y. Вызывается:
+   *    • из `create()` (первый spawn);
+   *    • из `goBattle` (если cols изменился после прохождения уровня);
+   *    • из `returnToBase` (тот же reason). */
+  private ensureFightersExist(): void {
+    const cols = getState().field.cols;
+    const laneWidth = DESIGN_WIDTH / cols;
+    const tokenSize = Math.min(laneWidth * 0.42, 44);
+    // Cols изменился → destroy all and recreate (размер ячейки/токена другой).
+    if (this.fighters.length !== cols) {
+      for (const f of this.fighters) f?.destroy();
+      this.fighters = [];
+      this.fighterTierTexts = [];
+      this.fighterHitsTexts = [];
+      this.fighterRings = [];
+      this.fighterTierShown = [];
+      this.fighterHitsRemaining = [];
+      for (let li = 0; li < cols; li++) {
+        this.createIdleFighter(li, laneWidth, tokenSize);
+      }
+      return;
+    }
+    // Cols тот же — просто reposition к idle (на случай что fighters остались в
+    // битвенной Y от прошлого боя). И сбросить visual оружия.
+    for (let li = 0; li < cols; li++) {
+      const f = this.fighters[li];
+      if (!f) continue;
+      f.x = (li + 0.5) * laneWidth;
+      f.y = FIGHTER_IDLE_Y;
+      f.setScale(1);
+      this.resetFighterVisualToIdle(li);
+    }
+  }
+
+  private createIdleFighter(li: number, laneWidth: number, tokenSize: number): void {
+    const x = (li + 0.5) * laneWidth;
+    const ringColor = 0x55606e; // серый — оружия нет
+    const circle = this.add
+      .circle(0, 0, tokenSize * 0.6, 0x66ccff)
+      .setStrokeStyle(3, ringColor, 1);
+    const tierLabel = this.add
+      .text(0, -2, '', {
+        fontFamily: 'monospace', fontSize: '20px', color: '#06121f',
+      })
+      .setOrigin(0.5);
+    const hitsLabel = this.add
+      .text(0, tokenSize * 0.7 + 4, '', {
+        fontFamily: 'monospace', fontSize: '12px', color: '#ffffff',
+      })
+      .setOrigin(0.5);
+    hitsLabel.setStroke('#000000', 3);
+    const fighter = this.add.container(x, FIGHTER_IDLE_Y, [circle, tierLabel, hitsLabel]).setDepth(5);
+    this.fighters[li] = fighter;
+    this.fighterTierTexts[li] = tierLabel;
+    this.fighterHitsTexts[li] = hitsLabel;
+    this.fighterRings[li] = circle;
+    this.fighterTierShown[li] = 0;
+    this.fighterHitsRemaining[li] = 0;
+  }
+
+  /** Сброс visual'а бойца к idle (без оружия): пустые labels, серое кольцо. */
+  private resetFighterVisualToIdle(li: number): void {
+    const tierLabel = this.fighterTierTexts[li];
+    const hitsLabel = this.fighterHitsTexts[li];
+    const ring = this.fighterRings[li];
+    if (tierLabel) tierLabel.setText('');
+    if (hitsLabel) hitsLabel.setText('');
+    if (ring) ring.setStrokeStyle(3, 0x55606e, 1);
+    this.fighterTierShown[li] = 0;
+    this.fighterHitsRemaining[li] = 0;
+  }
+
   /** Синхронизация trashRect с позицией trashContainer (если её менял layout-editor). */
   private syncTrashRect(): void {
     const c = this.trashContainer;
@@ -783,20 +877,20 @@ export class WorldScene extends Phaser.Scene {
 
     this.mode = 'transition';
     this.lanesDone = 0;
+    this.laneCompleted = [];
     this.resultShown = false;
     this.speedFactor = 1;
-    this.fighters = [];
-    this.fighterTierTexts = [];
-    this.fighterHitsTexts = [];
-    this.fighterRings = [];
-    this.fighterTierShown = [];
-    this.fighterHitsRemaining = [];
+    // Боевые арреи preserve через сцену: fighters создаются один раз в create()
+    // (createIdleFighters) и переиспользуются. В spawnAndDispatchFighters обновим
+    // их visuals под арсенал. Battle-only nodes (zombies/crates/road) очистим:
     this.chestTokens = [];
     this.obTokens = [];
     this.obBars = [];
     this.obBarBgs = [];
     this.obHpTexts = [];
     this.battleNodes = [];
+    // ensureFightersExist — если cols вырос (level up), пересоздать fighters.
+    this.ensureFightersExist();
 
     const level = generateLevel(s.level, {
       workshopTier: s.workshopTier,
@@ -1002,72 +1096,60 @@ export class WorldScene extends Phaser.Scene {
 
   private spawnAndDispatchFighters(arsenals: number[][]): void {
     const cols = this.level!.cols;
-    const tokenSize = Math.min(this.laneWidth * 0.42, 44);
-    // Стартовая позиция бойцов — НАД мердж-полем (мердж-поле y=465..875, бойцы выше).
-    const spawnY = 540;
+    const laneStartY = GATE_Y - 10; // прямо у ворот, сразу за их линией
 
+    // Обновляем visual'ы существующих (idle) бойцов под арсенал линии.
     for (let li = 0; li < cols; li++) {
-      const x = this.colCenterX(li);
+      const fighter = this.fighters[li];
+      if (!fighter) continue;
       const arsenal = arsenals[li] ?? [];
       const bestTier = arsenal.length ? Math.max(...arsenal) : 0;
       const startHits = bestTier ? getWeapon(bestTier).hits : 0;
       const ringColor = bestTier ? TIER_COLORS[bestTier] ?? 0x66ccff : 0x55606e;
-
-      const circle = this.add
-        .circle(0, 0, tokenSize * 0.6, 0x66ccff)
-        .setStrokeStyle(3, ringColor, 1);
-      const tierLabel = this.add
-        .text(0, -2, bestTier ? String(bestTier) : '—', {
-          fontFamily: 'monospace', fontSize: '20px', color: '#06121f',
-        })
-        .setOrigin(0.5);
-      const hitsLabel = this.add
-        .text(0, tokenSize * 0.7 + 4, bestTier ? String(startHits) : '', {
-          fontFamily: 'monospace', fontSize: '12px', color: '#ffffff',
-        })
-        .setOrigin(0.5);
-      hitsLabel.setStroke('#000000', 3);
-
-      // Спавн чуть выше мердж-поля колонки.
-      const fighter = this.add.container(x, spawnY, [circle, tierLabel, hitsLabel]).setDepth(5);
-      // Появление: масштаб 0 → 1.
-      fighter.setScale(0);
-      this.tweens.add({ targets: fighter, scale: 1, duration: 250, ease: 'Back.Out' });
-
-      this.fighters[li] = fighter;
-      this.fighterTierTexts[li] = tierLabel;
-      this.fighterHitsTexts[li] = hitsLabel;
-      this.fighterRings[li] = circle;
+      this.fighterRings[li]?.setStrokeStyle(3, ringColor, 1);
+      this.fighterTierTexts[li]?.setText(bestTier ? String(bestTier) : '—');
+      this.fighterHitsTexts[li]?.setText(bestTier ? String(startHits) : '');
       this.fighterTierShown[li] = bestTier;
       this.fighterHitsRemaining[li] = startHits;
-      this.battleNodes.push(fighter);
     }
 
-    // Визуально «забираем» оружие — оружейные плитки исчезают с поля (лутбоксы остаются).
-    this.board.hideWeaponTiles();
-
-    // Бойцы бегут вверх через ворота к началу своей линии (чуть выше ворот).
-    this.time.delayedCall(450, () => {
-      let arrived = 0;
-      const total = cols;
-      const laneStartY = GATE_Y - 10; // прямо у ворот, сразу за их линией
-      for (let li = 0; li < total; li++) {
-        const fighter = this.fighters[li];
-        this.tweens.add({
-          targets: fighter,
-          y: laneStartY,
-          duration: 700,
-          ease: 'Quad.Out',
-          onComplete: () => {
-            arrived++;
-            if (arrived === total) {
-              this.mode = 'battle';
-              for (let li = 0; li < total; li++) this.playLane(li);
-            }
-          },
-        });
+    // Анимация: idle (~Y=500) → pickup у мердж-поля (~580) → подняться к laneStartY (430).
+    // Пока бойцы спускаются — оружие visually «снимается» с поля (hideWeaponTiles
+    // вызываем в момент достижения pickup Y).
+    let arrived = 0;
+    const total = cols;
+    for (let li = 0; li < total; li++) {
+      const fighter = this.fighters[li];
+      if (!fighter) {
+        arrived++;
+        if (arrived === total) this.startBattle();
+        continue;
       }
-    });
+      // 1) Спуск к мерж-полю (быстрый, в стиле «иду брать оружие»).
+      this.tweens.add({
+        targets: fighter, y: FIGHTER_PICKUP_Y, duration: 350, ease: 'Quad.In',
+        onComplete: () => {
+          // Когда первый боец достиг pickup — снимаем оружие с поля.
+          if (li === 0) this.board.hideWeaponTiles();
+          // 2) Подъём к старту своей линии (через ворота).
+          this.tweens.add({
+            targets: fighter, y: laneStartY, duration: 700, ease: 'Quad.Out',
+            onComplete: () => {
+              arrived++;
+              if (arrived === total) this.startBattle();
+            },
+          });
+        },
+      });
+    }
+  }
+
+  /** Финальный переход в режим боя — вызывается когда все бойцы дошли до lane start. */
+  private startBattle(): void {
+    if (this.resultShown) return;
+    this.mode = 'battle';
+    const total = this.level?.cols ?? 0;
+    for (let li = 0; li < total; li++) this.playLane(li);
   }
 
   // ============================== Battle playback ==============================
@@ -1109,7 +1191,13 @@ export class WorldScene extends Phaser.Scene {
       const killed = hpAfter <= 0;
 
       if (hits === 0) {
-        if (carryIn > 0) {
+        // Различаем два случая:
+        //   • carry-killed (hpAfter === 0): step уже в chain stops предыдущего event.
+        //     Skip (нет нового event).
+        //   • carry-wound depleted (hpAfter > 0): carry-contact списал ПОСЛЕДНИЙ hit,
+        //     врага не убил, ничего бить нечем → бой остановился у живого зомби и
+        //     должен побежать на базу. Нужен stuck event, иначе бой завис у zombie.
+        if (carryIn > 0 && hpAfter === 0) {
           i++;
           continue;
         }
@@ -1217,7 +1305,9 @@ export class WorldScene extends Phaser.Scene {
   private runEvents(li: number, events: LaneEvent[], idx: number): void {
     if (this.resultShown) return;
     if (idx >= events.length) {
-      this.finishLane(li);
+      // Safety net: если линия закончилась без явного markLaneCompleted
+      // (например, events empty или вышли через unusual путь).
+      this.markLaneCompleted(li);
       return;
     }
     const ev = events[idx];
@@ -1229,12 +1319,19 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  private finishLane(_li: number): void {
+  /** Отметить линию завершённой (запускает таймер результата, если это последняя
+   *  незакрытая линия). Idempotent — повторные вызовы для той же линии игнорируются.
+   *  Вызывается СРАЗУ когда событие линии решено (chest открыт / стук объявлен /
+   *  full retreat начался), а не после длинной анимации возврата бойца. */
+  private markLaneCompleted(li: number): void {
+    if (this.resultShown) return;
+    if (this.laneCompleted[li]) return;
+    this.laneCompleted[li] = true;
     this.lanesDone += 1;
-    if (this.lanesDone >= this.level!.cols) {
-      // Пауза 2с — дать игроку посмотреть на открытые сундуки и их содержимое
-      // до появления модалки результата. На skip эта задержка пропускается.
-      this.time.delayedCall(2000, () => {
+    if (this.lanesDone >= (this.level?.cols ?? 0)) {
+      // 1с пауза — дать игроку посмотреть на открытые сундуки / увидеть стук.
+      // Раньше было 2с + ждали отступление за экран = ~4-5с.
+      this.time.delayedCall(1000, () => {
         if (this.resultShown) return;
         this.showResult();
       });
@@ -1276,6 +1373,9 @@ export class WorldScene extends Phaser.Scene {
           this.syncFighterWeapon(li, ev.weaponTierAfter, ev.weaponHitsAfter);
         }
         if (ev.fullRetreat) {
+          // Решение линии принято: бой отступает за экран. Лайн считается completed
+          // прямо сейчас (визуальный возврат — в фоне, не блокирует попап результата).
+          this.markLaneCompleted(li);
           this.returnFighterOffscreen(li, onDone);
         } else if (ev.retreat) {
           // Короткий откат «полшажка назад» (визуально упёрся).
@@ -1387,6 +1487,9 @@ export class WorldScene extends Phaser.Scene {
       onComplete: () => {
         if (this.resultShown) return;
         this.openChest(li);
+        // Лайн завершена — chest открыт. Запускаем таймер результата, не ждём
+        // дальнейших анимаций сундука/idle-bounce.
+        this.markLaneCompleted(li);
         if (ev.weaponTierAfter !== undefined) {
           this.syncFighterWeapon(li, ev.weaponTierAfter, ev.weaponHitsAfter);
         }
@@ -1426,6 +1529,9 @@ export class WorldScene extends Phaser.Scene {
       onComplete: () => {
         if (this.resultShown) return;
         this.popText(fighter.x, stuckY, 'отступ', '#ff8a8a');
+        // Решение линии принято: оружие закончилось, бой отступает. Запускаем
+        // таймер результата сразу, визуальный возврат идёт фоном.
+        this.markLaneCompleted(li);
         if (ev.weaponTierAfter !== undefined) {
           this.syncFighterWeapon(li, ev.weaponTierAfter, ev.weaponHitsAfter);
         } else {
@@ -1651,22 +1757,7 @@ export class WorldScene extends Phaser.Scene {
     for (const n of this.resultNodes) n.destroy();
     this.resultNodes = [];
 
-    // 2) Tear down road (все battleNodes).
-    for (const n of this.battleNodes) n.destroy();
-    this.battleNodes = [];
-    this.fighters = [];
-    this.fighterTierTexts = [];
-    this.fighterHitsTexts = [];
-    this.fighterRings = [];
-    this.fighterTierShown = [];
-    this.fighterHitsRemaining = [];
-    this.chestTokens = [];
-    this.obTokens = [];
-    this.obBars = [];
-    this.obBarBgs = [];
-    this.obHpTexts = [];
-
-    // 3) Убрать speed/skip HUD.
+    // 2) Убрать speed/skip HUD.
     if (this.skipBtn) { this.skipBtn.destroy(); this.skipBtn = null; }
     for (const sb of this.speedButtons) sb.btn.destroy();
     this.speedButtons = [];
@@ -1674,13 +1765,37 @@ export class WorldScene extends Phaser.Scene {
     this.tweens.timeScale = 1;
     this.time.timeScale = 1;
 
-    // 4) Камера обратно к базе.
+    // 3) Mode = base сразу (UI отзывчиво).
+    this.mode = 'base';
+    this.resultShown = false;
+    this.lanesDone = 0;
+    this.laneCompleted = [];
+    this.level = null;
+    this.result = null;
+    this.mainUI.setBottomVisible(true);
+    this.gradientTop?.setVisible(true);
+    this.gradientBot?.setVisible(true);
+    this.invPlaceArt?.setVisible(true);
+    this.trashPlaceArt?.setVisible(true);
+    this.refreshButtons();
+
+    // 4) Камера обратно к базе. Battle-only объекты (road extension, зомби, сундуки,
+    //    HP-бары) уничтожаем В onComplete — иначе во время скролла было бы видно
+    //    «дыры» в локации (дорога исчезла, а камера ещё над ней).
     this.tweens.add({
       targets: this.cameras.main,
       scrollY: 0,
       duration: 600,
       ease: 'Sine.InOut',
-      onUpdate: () => { /* ensure cam refresh */ },
+      onComplete: () => {
+        for (const n of this.battleNodes) n.destroy();
+        this.battleNodes = [];
+        this.chestTokens = [];
+        this.obTokens = [];
+        this.obBars = [];
+        this.obBarBgs = [];
+        this.obHpTexts = [];
+      },
     });
 
     // 4b) Закрыть ворота (figma-арт) + тени — вернуть створки и их тени в исходные позиции.
@@ -1694,24 +1809,34 @@ export class WorldScene extends Phaser.Scene {
     }
 
     // 5) Восстановить мердж-плитки (state мог измениться — лутбоксы + восстановленное оружие).
-    //    relayout пересоздаёт ВСЕ плитки visible — отдельный show не нужен.
     this.board.relayout(getState().field);
-    // Поле может вырасти, но позиции inv/trash фиксированы из figma — не пересчитываем.
     this.inv.rebuild();
     this.hud.refresh();
 
-    // 6) Mode = base. Возвращаем UI базы.
-    this.mode = 'base';
-    this.resultShown = false;
-    this.lanesDone = 0;
-    this.level = null;
-    this.result = null;
-    this.mainUI.setBottomVisible(true);
-    this.gradientTop?.setVisible(true);
-    this.gradientBot?.setVisible(true);
-    this.invPlaceArt?.setVisible(true);
-    this.trashPlaceArt?.setVisible(true);
-    this.refreshButtons();
+    // 6) Бойцы persistent — НЕ destroy. Если cols вырос (level up) — ensureFightersExist
+    //    пересоздаст под новое cols. Иначе tween существующих обратно к idle Y.
+    const prevFighterCount = this.fighters.length;
+    const newCols = getState().field.cols;
+    if (prevFighterCount !== newCols) {
+      this.ensureFightersExist(); // полная пересоздание под новый cols
+    } else {
+      // Тех же бойцов вернуть на базу анимацией.
+      for (let li = 0; li < this.fighters.length; li++) {
+        const f = this.fighters[li];
+        if (!f) continue;
+        // Остановить любые активные idle-bounce твины (chest idle).
+        this.tweens.killTweensOf(f);
+        f.setScale(1);
+        // Если боец уехал за низ экрана (returnFighterOffscreen) — tween обратно.
+        // Если уже в видимой зоне — короткий tween к idle Y.
+        const targetX = (li + 0.5) * (DESIGN_WIDTH / newCols);
+        this.tweens.add({
+          targets: f, x: targetX, y: FIGHTER_IDLE_Y,
+          duration: 600, ease: 'Sine.InOut',
+        });
+        this.resetFighterVisualToIdle(li);
+      }
+    }
   }
 
   // ============================== Misc =========================================

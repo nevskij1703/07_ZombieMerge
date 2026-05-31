@@ -84,13 +84,14 @@ function makePressOverlay(scene: Phaser.Scene, w: number, h: number): Phaser.Gam
  * Применить «выключенный» вид ко всему контейнеру кнопки через PreFX ColorMatrix
  * (Phaser 3.60+):
  *   • `grayscale(1)`  — полностью убирает цвет (зелёный/коричневый/жёлтый bg → серый);
- *   • `brightness(0.55)` — затемняет ниже среднего, чтобы кнопка явно читалась как
- *     неактивная даже на фоне base-локации.
+ *   • `contrast(-0.35)` — снижает контраст между бликом и тенью SVG-кнопки, делает
+ *     поверхность «плоской» (figma disabled: «тело перекрашивается в серый», без 3D);
+ *   • `brightness(0.45)` — затемняет, чтобы кнопка явно читалась как неактивная.
  *
  * Это нужно вместо `setTint(0x808080)`, потому что tint = МУЛЬТИПЛИКАТИВНОЕ затемнение,
  * и зелёный × серый = тёмно-зелёный, а не серый. ColorMatrix фактически десатурирует.
  *
- * Применяется к контейнеру → одной операцией обесцвечивает и bg, и контент, и оверлей.
+ * Применяется к контейнеру → одной операцией обесцвечивает bg, контент, overlay.
  * preFX undefined в Canvas-режиме — `?.` спокойно скипнет.
  */
 function applyDisabledFx(container: Phaser.GameObjects.Container): void {
@@ -98,7 +99,8 @@ function applyDisabledFx(container: Phaser.GameObjects.Container): void {
   container.preFX.clear();
   const cm = container.preFX.addColorMatrix();
   cm.grayscale(1);
-  cm.brightness(0.55);
+  cm.contrast(-0.35);
+  cm.brightness(0.45);
 }
 
 /** Снять disabled-эффект — вернуть кнопку к её обычным цветам. */

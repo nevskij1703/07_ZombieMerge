@@ -72,10 +72,6 @@ export class MergeBoard {
   private dragging = false;
   private dragTile: Phaser.GameObjects.Container | null = null;
 
-  // Идёт анимация мерджа — input ignored, чтобы пользователь не успел запустить
-  // вторую анимацию пока state.field уже изменился, но визуал ещё нет.
-  private animating = false;
-
   constructor(scene: Phaser.Scene, field: FieldState, rect: BoardRect, cb: BoardCallbacks) {
     this.scene = scene;
     this.field = field;
@@ -161,7 +157,6 @@ export class MergeBoard {
   }
 
   private onPointerDown(pointer: Phaser.Input.Pointer): void {
-    if (this.animating) return; // ignore во время merge-VFX
     const idx = this.pointerCell(pointer);
     if (idx === -1) return; // клик вне поля — это не наш жест (кнопки/HUD/инвентарь)
     this.downIndex = idx;
@@ -172,14 +167,15 @@ export class MergeBoard {
   }
 
   private onPointerMove(pointer: Phaser.Input.Pointer): void {
-    if (this.animating) return;
     if (this.downIndex === null) return;
     if (!this.dragging) {
       const dist = Phaser.Math.Distance.Between(this.downX, this.downY, pointer.worldX, pointer.worldY);
       if (dist < DRAG_THRESHOLD) return;
       const tile = this.tileByIndex.get(this.downIndex);
-      if (!tile) {
-        // тащить из пустой клетки нечего
+      // alpha < 0.5 = плитка ещё в fade-in после параллельного мерджа. Drag по ней
+      // запретим (игрок её толком не видит, схватить пальцем нельзя), но через
+      // drop'ом в эту клетку получить мердж — можно, это разрешено в applyMerge.
+      if (!tile || tile.alpha < 0.5) {
         this.downIndex = null;
         return;
       }
@@ -198,7 +194,6 @@ export class MergeBoard {
   }
 
   private onPointerUp(pointer: Phaser.Input.Pointer): void {
-    if (this.animating) return;
     if (this.downIndex === null) return;
     const from = this.downIndex;
     const wasDragging = this.dragging;
@@ -225,6 +220,10 @@ export class MergeBoard {
   // --- Логика слотов ---
 
   private handleTap(index: number): void {
+    // Если плитка ещё в fade-in после параллельного мерджа — не реагируем на тап
+    // (через мгновение появится — пусть игрок видит, что появилось).
+    const existing = this.tileByIndex.get(index);
+    if (existing && existing.alpha < 0.5) return;
     const value = this.field.cells[index];
 
     // Тап по лутбоксу — открыть его (без выделения/мерджа).
@@ -284,52 +283,75 @@ export class MergeBoard {
     }
   }
 
+  /**
+   * Мердж двух плиток с VFX-анимацией. State мутируется СРАЗУ — игрок может
+   * параллельно делать другие действия (мердж в других ячейках, drag другой
+   * плитки и т.д.). Анимация старых плиток живёт независимо в Phaser-tween'ах.
+   *
+   * Цепочка мерджей в одну и ту же ячейку: если to-плитка уже в fade-in после
+   * предыдущего мерджа (alpha<1), её сразу делаем видимой (setAlpha(1) +
+   * setScale(1)) и помечаем `finalized` — старый VFX докатится до flash, но
+   * не дёрнет её повторно scale-bounce.
+   */
   private applyMerge(from: number, to: number): void {
-    if (this.animating) return;
-    const fromTile = this.tileByIndex.get(from);
-    const toTile = this.tileByIndex.get(to);
-    // Если по какой-то причине одной из плиток нет визуально — fallback на старый
-    // мгновенный мердж (state-only). Не должно происходить в нормальном flow.
-    if (!fromTile || !toTile) {
-      const result = mergeInto(this.field, from, to);
-      this.rebuildTiles();
-      this.cb.onChange();
-      if (result != null) this.cb.onMerge?.(result);
-      return;
+    const oldFromTile = this.tileByIndex.get(from);
+    const oldToTile = this.tileByIndex.get(to);
+
+    // Если to-плитка ещё в fade-in от предыдущего мерджа — мгновенно показать,
+    // чтобы новый VFX стартовал с видимого состояния.
+    if (oldToTile && oldToTile.alpha < 1) {
+      oldToTile.setAlpha(1).setScale(1);
+      oldToTile.setData('finalized', true);
     }
-    // Выдёргиваем плитки из map, чтобы rebuildTiles в финале не пытался их destroy'ить
-    // (мы сами их уничтожаем по окончании tween-цепи).
+
+    // State-mutation мгновенно. Дальнейшие операции игры видят актуальное поле.
+    const result = mergeInto(this.field, from, to);
+    this.cb.onChange();
+    if (result != null) this.cb.onMerge?.(result);
+
+    // Старые плитки больше не доступны через map — они доживают свою VFX-жизнь
+    // отдельно и destroy себя сами в Phase 5.
     this.tileByIndex.delete(from);
     this.tileByIndex.delete(to);
-    const toCenter = this.centerOf(to);
-    // Любая активная подсветка (preFX glow) уйдёт вместе с уничтожением иконок ниже.
-    this.playMergeVfx(fromTile, toTile, toCenter, () => {
-      fromTile.destroy();
-      toTile.destroy();
-      const result = mergeInto(this.field, from, to);
-      this.rebuildTiles();
-      this.cb.onChange();
-      if (result != null) this.cb.onMerge?.(result);
-    });
+
+    // Сразу создаём новую плитку tier+1 в позиции `to`. Она НЕВИДИМА (alpha=0)
+    // до завершения VFX, но УЖЕ В map — следующий мердж может её использовать.
+    let newTile: Phaser.GameObjects.Container | null = null;
+    if (result != null) {
+      newTile = this.makeTile(to, result);
+      newTile.setAlpha(0).setScale(0.5);
+      this.tileByIndex.set(to, newTile);
+    }
+
+    // Запуск VFX (без блокировки input).
+    if (oldFromTile && oldToTile && result != null && newTile) {
+      this.playMergeVfx(oldFromTile, oldToTile, this.centerOf(to), newTile);
+    } else if (newTile) {
+      // Без визуала старых плиток анимировать нечего — сразу показать новую.
+      newTile.setAlpha(1).setScale(1);
+    }
   }
 
   /**
-   * VFX мерджа двух плиток (~440ms всего).
+   * VFX мерджа двух плиток (~440ms всего). НЕ блокирует input и НЕ блокирует
+   * параллельные мерджи — каждый VFX живёт независимо.
    *   Phase 1 (0-60ms):    fromTile долетает до центра to-ячейки (если был drag).
    *   Phase 2 (60-180ms):  расходятся ±25% cellSize по X («накапливают энергию»).
    *   Phase 3 (180-330ms): тряска (yoyo по 25ms, 3 repeat) с мелким смещением по Y.
    *   Phase 4 (330-440ms): резкое схождение в центр, scale → 0.3, alpha → 0.
-   *   Phase 5 (440-640ms): вспышка ADD-blend круга в центре, новая плитка из rebuildTiles.
-   *   Параллельно (0-600ms): 10 «искр» (Arc + ADD blend) с радиусов ~1.0-1.6 cellSize
-   *     летят в центр с easeIn — должны исчезнуть к моменту вспышки.
+   *   Phase 5 (440+ms):    вспышка ADD-blend круга, fade-in новой плитки tier+1.
+   *   Параллельно (0-580ms): 10 «искр» с радиусов 1.0-1.6 × cellSize летят к центру.
+   *
+   * `newTile` уже создан в applyMerge и лежит в tileByIndex. Если до завершения
+   * фазы 5 он успел стать частью другого мерджа (data 'finalized' === true) или
+   * был destroy'ed — пропускаем fade-in, не дёргаем повторно.
    */
   private playMergeVfx(
     fromTile: Phaser.GameObjects.Container,
     toTile: Phaser.GameObjects.Container,
     toCenter: { x: number; y: number },
-    onDone: () => void,
+    newTile: Phaser.GameObjects.Container,
   ): void {
-    this.animating = true;
     const scene = this.scene;
     const cs = this.cellSize;
     // Поднимаем участников поверх остальных плиток.
@@ -350,6 +372,7 @@ export class MergeBoard {
 
     // Phase 2: разъезд (через 60ms).
     scene.time.delayedCall(60, () => {
+      if (!fromTile.active || !toTile.active) return;
       scene.tweens.add({
         targets: fromTile,
         x: toCenter.x - cs * 0.25,
@@ -366,6 +389,7 @@ export class MergeBoard {
 
     // Phase 3: тряска (через 180ms, длится 150ms = 3 yoyo по 25ms).
     scene.time.delayedCall(180, () => {
+      if (!fromTile.active || !toTile.active) return;
       scene.tweens.add({
         targets: fromTile,
         y: toCenter.y + 4,
@@ -389,6 +413,7 @@ export class MergeBoard {
 
     // Phase 4: схождение (через 330ms).
     scene.time.delayedCall(330, () => {
+      if (!fromTile.active || !toTile.active) return;
       scene.tweens.killTweensOf(fromTile);
       scene.tweens.killTweensOf(toTile);
       scene.tweens.add({
@@ -401,7 +426,7 @@ export class MergeBoard {
         duration: 110,
         ease: 'Quad.In',
         onComplete: () => {
-          // Phase 5: вспышка и финализация.
+          // Phase 5: вспышка и появление newTile.
           const flash = scene.add
             .circle(toCenter.x, toCenter.y, cs * 0.4, 0xffffff, 0.9)
             .setDepth(60)
@@ -415,9 +440,22 @@ export class MergeBoard {
             ease: 'Quad.Out',
             onComplete: () => flash.destroy(),
           });
-          // rebuildTiles внутри callback пересоздаст новую плитку поверх вспышки.
-          onDone();
-          this.animating = false;
+          // Появление новой плитки — только если ещё актуальна (не была
+          // подхвачена другим мерджем как `oldToTile` и не destroy'ed).
+          if (newTile.active && !newTile.getData('finalized')) {
+            scene.tweens.add({
+              targets: newTile,
+              alpha: 1,
+              scaleX: { from: 0.5, to: 1 },
+              scaleY: { from: 0.5, to: 1 },
+              duration: 180,
+              ease: 'Back.Out',
+            });
+          }
+          // Старые tiles уничтожаем (если ещё живы — другой мердж мог их
+          // использовать как oldToTile и destroy раньше, но это маловероятно).
+          if (fromTile.active) fromTile.destroy();
+          if (toTile.active) toTile.destroy();
         },
       });
     });

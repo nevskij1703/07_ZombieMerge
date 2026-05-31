@@ -338,11 +338,15 @@ export class WorldScene extends Phaser.Scene {
     const tokenSize = this.obstacleTokenSize || 44;
     const speed = FIGHTER_WALK_SPEED * ZOMBIE_SPEED_RATIO;
     const dy = Math.min(speed * dt, 8);
-    const gateLimitY = GATE_Y - tokenSize / 2;
+    // Линия первого зомби (obstacleY(0)) — это ГРАНИЦА: дальше зомби идти не могут,
+    // даже если боец уже убежал на базу. Раньше границей был сам гейт (zombies могли
+    // приближаться вплотную к воротам) — теперь они останавливаются на той же линии,
+    // где обычно спавнятся первые зомби.
+    const frontLineY = this.obstacleY(0);
     const fighter = lane.fighter;
     if (!fighter) return;
 
-    let upperLimitY = Math.min(fighter.y - tokenSize - ZOMBIE_STOP_MARGIN, gateLimitY);
+    let upperLimitY = Math.min(fighter.y - tokenSize - ZOMBIE_STOP_MARGIN, frontLineY);
     let crateAhead = false; // живая коробка между бойцом и текущей точкой обхода
 
     for (let idx = 0; idx < lane.obs.length; idx++) {

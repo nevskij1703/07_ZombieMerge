@@ -44,6 +44,14 @@ export interface SaveState {
   inventory: WeaponTier[]; // буфер переполнения (не-мердж)
   settings: Settings;
   stats: Stats;
+  /** Динамическая подкрутка наград. 1.0 = нейтрально. <1 = nerf (игрок слишком силён),
+   *  >1 = buff (игрок слаб). Применяется в levelGen к scrapPerPile, chest.scrap*, и
+   *  весам chest.rewardWeights (weapon/lootbox). Обновляется в `updateRewardTuning`. */
+  rewardMultiplier: number;
+  /** Сколько уровней подряд игрок открыл ≥80% сундуков. На strongStreakTrigger+ → nerf. */
+  strongStreak: number;
+  /** Сколько уровней подряд игрок открыл 0 сундуков. На каждом таком уровне → buff. */
+  weakStreak: number;
 }
 
 // --- Уровень / бой ---

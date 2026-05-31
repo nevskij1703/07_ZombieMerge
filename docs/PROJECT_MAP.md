@@ -19,9 +19,9 @@
 | `economy.ts` | `produceCost(tier)`, `canAfford(scrap, cost)`. | ~13 |
 | `merge.ts` | Field cell ops: `canMergeIndices`, `mergeInto`, `moveOrSwap`, `placeFirstFree`, `isFull`, `pullFromInventory`, `addLoot`, `resizeField`. **Лутбоксы блокируются `isWeaponCellValue` из `lootbox.ts`.** | ~120 |
 | `lootbox.ts` | Кодирование лутбоксов в клетках: `LOOTBOX_MEDIUM_CODE=1001`, `LOOTBOX_ELITE_CODE=1002`. `isWeaponCellValue`, `isLootboxCode`, `lootboxKindOfCode`, `rollLootboxTier(kind, ws, best, rng)`. | ~55 |
-| `levelGen.ts` | `generateLevel(level, ctx?)` детерминированная. Sample tier по `sampleZombieTier`. `enforceMinTypes` на L1. Crate HP = 2×max лиции, lootbox kind по `mediumShare`. **Длина дорог одинакова на всех линиях**: `zombieCount` fixed + `pilesCount` сэмплится один раз/уровень + crate ЗАМЕНЯЕТ зомби. **Anchored shuffle**: тиры зомби сортируются, режутся на 3 зоны (weak/mid/strong по ~1/3), внутри mid и strong — Fisher-Yates → финал линии 50/50 топ-или-предтоп. | ~225 |
+| `levelGen.ts` | `generateLevel(level, ctx?)` детерминированная. Sample tier по `sampleZombieTier`. `enforceMinTypes` на L1. Crate HP = 2×max лиции, lootbox kind по `mediumShare`. **Длина дорог одинакова на всех линиях**: `zombieCount` fixed + `pilesCount` сэмплится один раз/уровень + crate ЗАМЕНЯЕТ зомби. **Anchored shuffle**: тиры зомби сортируются, режутся на 3 зоны (weak/mid/strong по ~1/3), внутри mid и strong — Fisher-Yates → финал линии 50/50 топ-или-предтоп. **Dynamic reward tuning**: `ctx.rewardMultiplier` через `scaleBalance` → scrapPerPile, chest.scrap*, chest.rewardWeights (weapon+lootbox × mult). | ~260 |
 | `battleSim.ts` | Pure simulator. `simulateBattle(level, arsenals)` → `BattleResult`. Lunge-модель: carry-пробивание (`carryIn`/`carryOut`). Чистая, без RNG. | ~190 |
-| `progression.ts` | `laneArsenals(field)` (фильтрует лутбоксы), `applyBattleResult(state, result)`, `bestWeaponTier(state)`. | ~80 |
+| `progression.ts` | `laneArsenals(field)` (фильтрует лутбоксы), `applyBattleResult(state, result)`, `bestWeaponTier(state)`. **Dynamic reward tuning**: внутренний `updateRewardTuning` после каждого боя обновляет `state.rewardMultiplier`/`strongStreak`/`weakStreak` по правилам `balance.dynamicDifficulty`. | ~110 |
 | `autotest.ts` | Headless greedy player. `runAutotest(50)` → `AutotestReport`. Поля sample: `lanesReached`, `lanesTotal`, `weaponsLooted`, `lootboxesLooted`. | ~250 |
 | `selfTest.ts` | Dev-time sanity. `coreSelfTest`, `battleSelfTest`, `levelSanityTest`. | ~95 |
 | `rng.ts` | mulberry32 seeded RNG. `makeRng(seed)`, `rint(rng, lo, hi)`. | ~25 |
@@ -204,6 +204,13 @@ Render layers (depth scheme):
 - `balance.weapons[N].hits` — линейный N+3.
 - `balance.chest.chestWeaponOffsetMin/Max` ([-2, +2]) — тир оружия из сундука vs workshop.
 - `balance.lootbox.eliteOffsetMin/Max` ([-2, 0]) — тир elite-лутбокса vs player best.
+
+### Dynamic difficulty (подкрутка наград от силы игрока)
+- `balance.dynamicDifficulty.strongChestRatio` (0.8) — порог «strong» уровня (reached/total).
+- `balance.dynamicDifficulty.strongStreakTrigger` (3) — после скольких подряд strong-уровней начинается нерф.
+- `balance.dynamicDifficulty.nerfStep` (0.7) — мультипликатор за каждый nerf-tick (-30%).
+- `balance.dynamicDifficulty.buffStep` (1.5) — мультипликатор за каждый weak-уровень (+50%, с 1-го раза).
+- `balance.dynamicDifficulty.multMin/Max` (0.1 / 10.0) — clamp для `state.rewardMultiplier`.
 
 ### Anchors (зомби-HP — линейная интерполяция между анкорами)
 - `balance.zombies[1].hp=5`, `[6].hp=25`, `[12].hp=150`. Промежуточные piecewise linear.

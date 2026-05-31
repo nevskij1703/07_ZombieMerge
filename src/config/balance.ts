@@ -81,6 +81,26 @@ export interface TrashBalance {
   refundRatio: number;
 }
 
+/** Динамическая подкрутка наград — реагирует на силу игрока. После каждого боя в
+ *  `progression.updateRewardTuning` смотрим долю дошедших до сундука бойцов:
+ *   • ≥ strongChestRatio  → strongStreak++; если streak ≥ strongStreakTrigger → mult *= nerfStep.
+ *   • reached == 0        → weakStreak++; mult *= buffStep (срабатывает с 1-го раза).
+ *   • Иначе               → оба streak сбрасываются, mult НЕ меняется (freeze).
+ *  Клампим mult в [multMin, multMax]. */
+export interface DynamicDifficultyBalance {
+  /** Минимальная доля reached/total чтобы уровень считался «сильным». 0.8 = ≥80%. */
+  strongChestRatio: number;
+  /** Сколько consecutive сильных уровней нужно перед ПЕРВЫМ нерфом. 3 = после 1,2,3 → нерф. */
+  strongStreakTrigger: number;
+  /** Множитель наград при каждом nerf-шаге. 0.7 = -30%. */
+  nerfStep: number;
+  /** Множитель наград при каждом buff-шаге. 1.5 = +50%. */
+  buffStep: number;
+  /** Нижняя/верхняя граница rewardMultiplier (защита от выезжания в крайности). */
+  multMin: number;
+  multMax: number;
+}
+
 export interface LevelGenConfig {
   /** Длина дороги (условные «слоты») на 1-м уровне. */
   baseRoadLength: number;
@@ -147,6 +167,7 @@ export interface Balance {
   chest: ChestReward;
   lootbox: LootboxBalance;
   trash: TrashBalance;
+  dynamicDifficulty: DynamicDifficultyBalance;
   economy: {
     startScrap: number;
     startDiamonds: number;
@@ -286,6 +307,20 @@ export const balance: Balance = {
   trash: {
     // Удаление оружия → возврат 50% от стоимости производства того же тира.
     refundRatio: 0.5,
+  },
+
+  dynamicDifficulty: {
+    // По тз: «больше 2-х уровней подряд >80% сундуков» → начинаем нерфить. То есть с 3-го
+    // strong-уровня подряд. Каждый последующий strong-уровень → ещё -30%.
+    strongChestRatio: 0.8,
+    strongStreakTrigger: 3,
+    nerfStep: 0.7,   // -30% за каждый strong-tick после triggerа
+    // По тз: «не открыл ни одного сундука за уровень» → сразу +50%. Каждый последующий
+    // weak-уровень → ещё +50% (от нового значения, мультипликативно).
+    buffStep: 1.5,   // +50% за каждый weak-уровень (с 1-го раза)
+    // Границы — чтобы при экстремальном перекосе значения не уезжали в абсурд.
+    multMin: 0.1,
+    multMax: 10.0,
   },
 
   economy: {

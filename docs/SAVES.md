@@ -8,11 +8,11 @@
 - Поле **`schemaVersion`** (целое) — отдельно от versionName приложения. Растёт **только** при изменении формата `data`.
 - `getCurrentSchemaVersion()` авто-выводится из `max(Object.keys(migrations))` — **не дублируется** константой.
 
-## Форма сейва (schemaVersion 1)
+## Форма сейва (schemaVersion 2)
 
 ```jsonc
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "scrap": 0,            // металлолом (софт-валюта)
   "diamonds": 0,         // хард-валюта — зарезервировано, мета отложена
   "level": 1,            // текущий уровень (1-based)
@@ -24,9 +24,17 @@
   },
   "inventory": [],       // тиры предметов в буфере переполнения
   "settings": { "sound": true, "vibration": true },
-  "stats": { "battlesWon": 0, "battlesRun": 0, "merges": 0 }
+  "stats": { "battlesWon": 0, "battlesRun": 0, "merges": 0 },
+  // v2: динамическая подкрутка наград (см. balance.dynamicDifficulty + progression.ts).
+  "rewardMultiplier": 1.0,  // 1.0=нейтрально. <1=nerf (силён), >1=buff (слаб). [multMin..multMax]
+  "strongStreak": 0,        // подряд уровней с ratio ≥ strongChestRatio (default 0.8)
+  "weakStreak": 0           // подряд уровней с reached==0
 }
 ```
+
+### Миграции
+
+- **v1 → v2**: добавлены `rewardMultiplier` (default 1.0), `strongStreak`, `weakStreak` (оба 0). Defensive — у старых сейвов поля проставляются нейтральными значениями, прогресс не теряется.
 
 ## Контракт
 

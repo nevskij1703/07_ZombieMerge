@@ -12,6 +12,38 @@ export interface LevelGenContext {
   workshopTier: number;
   /** Лучший тир оружия у игрока в данный момент (поле + инвентарь, исключая лутбоксы). */
   bestTier: number;
+  /** Динамический множитель наград (из state.rewardMultiplier). 1.0 = нейтрально.
+   *  Применяется к: scrapPerPile, chest.scrapMin/Max, и weapon+lootbox весам сундука. */
+  rewardMultiplier?: number;
+}
+
+/** Применить rewardMultiplier к relevant subset баланса, возвращая «scaled-copy».
+ *  Остальные поля (zombies, weapons, workshop, field, etc.) остаются исходными. */
+function scaleBalance(b: Balance, mult: number): Balance {
+  if (!mult || mult === 1.0) return b;
+  const scaledScrapPerPile = Math.max(1, Math.round(b.levelGen.scrapPerPile * mult));
+  const scaledChestScrapMin = Math.max(1, Math.round(b.chest.scrapMin * mult));
+  const scaledChestScrapMax = Math.max(
+    scaledChestScrapMin,
+    Math.round(b.chest.scrapMax * mult),
+  );
+  return {
+    ...b,
+    levelGen: { ...b.levelGen, scrapPerPile: scaledScrapPerPile },
+    chest: {
+      ...b.chest,
+      scrapMin: scaledChestScrapMin,
+      scrapMax: scaledChestScrapMax,
+      // Веса scrap-награды НЕ трогаем; weapon+lootbox масштабируем на mult.
+      // weightedPick нормирует — итог: nerf (mult<1) поднимает шанс scrap-награды,
+      // buff (mult>1) — шанс weapon/lootbox.
+      rewardWeights: {
+        scrap: b.chest.rewardWeights.scrap,
+        weapon: b.chest.rewardWeights.weapon * mult,
+        lootbox: b.chest.rewardWeights.lootbox * mult,
+      },
+    },
+  };
 }
 
 function clampTier(t: number): WeaponTier {
@@ -49,7 +81,8 @@ export function getFieldSize(level: number): { cols: number; rows: number } {
 }
 
 export function generateLevel(level: number, ctx?: LevelGenContext): Level {
-  const b = getBalance();
+  const rawBalance = getBalance();
+  const b = scaleBalance(rawBalance, ctx?.rewardMultiplier ?? 1.0);
   const rng = makeRng(Math.imul(level, 2654435761) ^ 0x9e3779b9);
   const { cols, rows } = getFieldSize(level);
   const roadLength = Math.round(

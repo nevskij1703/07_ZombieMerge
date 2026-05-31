@@ -7,6 +7,14 @@ type MigrationFn = (state: any) => any;
 export const migrations: Record<number, MigrationFn> = {
   // v0 -> v1: проект новый, legacy-хранилища нет. Identity.
   1: (state) => state,
+  // v1 -> v2: добавили динамическую подкрутку наград (rewardMultiplier + streaks).
+  // У существующих сейвов этих полей нет — выставляем нейтральные дефолты.
+  2: (state) => ({
+    ...state,
+    rewardMultiplier: typeof state?.rewardMultiplier === 'number' ? state.rewardMultiplier : 1.0,
+    strongStreak: typeof state?.strongStreak === 'number' ? state.strongStreak : 0,
+    weakStreak: typeof state?.weakStreak === 'number' ? state.weakStreak : 0,
+  }),
 };
 
 export function getCurrentSchemaVersion(): number {

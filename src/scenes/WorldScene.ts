@@ -713,6 +713,7 @@ export class WorldScene extends Phaser.Scene {
     const level = generateLevel(s.level, {
       workshopTier: s.workshopTier,
       bestTier: bestWeaponTier(s),
+      rewardMultiplier: s.rewardMultiplier,
     });
     const arsenals = laneArsenals(s.field);
     this.level = level;

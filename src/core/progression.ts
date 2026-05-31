@@ -22,12 +22,50 @@ export function laneArsenals(field: FieldState): WeaponTier[][] {
   return out;
 }
 
+/** Динамическая подкрутка наград: смотрим долю дошедших до сундука бойцов и
+ *  обновляем state.rewardMultiplier + strongStreak/weakStreak. Применяется к
+ *  СЛЕДУЮЩЕМУ уровню через levelGen (см. scaleBalance).
+ *
+ *  Правила (см. balance.dynamicDifficulty):
+ *  • ratio ≥ strongChestRatio:
+ *      strongStreak++; weakStreak=0.
+ *      Если strongStreak ≥ strongStreakTrigger (default 3) → mult *= nerfStep (0.7).
+ *  • reached == 0:
+ *      weakStreak++; strongStreak=0; mult *= buffStep (1.5).  (срабатывает с 1-го раза)
+ *  • иначе:
+ *      оба streak'a сбрасываются, mult НЕ меняется (заморозка). */
+function updateRewardTuning(state: SaveState, result: BattleResult): void {
+  const dd = getBalance().dynamicDifficulty;
+  const total = result.lanes.length;
+  if (total === 0) return;
+  const reached = result.lanes.filter(l => l.reachedChest).length;
+  const ratio = reached / total;
+  const clamp = (v: number): number => Math.max(dd.multMin, Math.min(dd.multMax, v));
+
+  if (ratio >= dd.strongChestRatio) {
+    state.strongStreak += 1;
+    state.weakStreak = 0;
+    if (state.strongStreak >= dd.strongStreakTrigger) {
+      state.rewardMultiplier = clamp(state.rewardMultiplier * dd.nerfStep);
+    }
+  } else if (reached === 0) {
+    state.weakStreak += 1;
+    state.strongStreak = 0;
+    state.rewardMultiplier = clamp(state.rewardMultiplier * dd.buffStep);
+  } else {
+    state.strongStreak = 0;
+    state.weakStreak = 0;
+    // rewardMultiplier остаётся как был — «заморозка».
+  }
+}
+
 /**
  * Применить результат боя к сейву.
  *  • Оружие столбцов остаётся на поле (возвращается на места).
  *  • Собранный ЛУТ-ОРУЖИЕ всегда идёт в инвентарь (игрок сам решает, когда выносить).
  *  • Собранные ЛУТБОКСЫ кладутся в свободные клетки поля; если места нет — в инвентарь.
  *  • Пройденный уровень → +1 и рост поля + детерминированный апгрейд Цеха.
+ *  • Динамическая подкрутка: на основе reached-ratio обновляем rewardMultiplier.
  */
 export function applyBattleResult(state: SaveState, result: BattleResult): void {
   state.scrap += result.totalScrap;
@@ -41,6 +79,8 @@ export function applyBattleResult(state: SaveState, result: BattleResult): void 
     }
   }
   state.stats.battlesRun += 1;
+
+  updateRewardTuning(state, result);
 
   if (result.passed) {
     state.stats.battlesWon += 1;

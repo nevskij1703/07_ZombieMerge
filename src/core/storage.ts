@@ -20,6 +20,9 @@ export function DEFAULT_STATE(): SaveState {
     inventory: [],
     settings: { sound: true, vibration: true },
     stats: { battlesWon: 0, battlesRun: 0, merges: 0 },
+    rewardMultiplier: 1.0,
+    strongStreak: 0,
+    weakStreak: 0,
   };
 }
 

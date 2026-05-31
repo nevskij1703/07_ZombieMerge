@@ -88,10 +88,10 @@ export function applyBattleResult(state: SaveState, result: BattleResult): void 
     state.stats.battlesWon += 1;
 
     // Бонус за прохождение уровня (хотя бы один сундук открыт — это и есть `passed`):
-    // +6× от текущей цены производства, округлённое вверх до сотен. Считается ДО
-    // апгрейда Цеха ниже — бонус начисляется по тиру, который игрок видел во время
-    // уровня (workshopTier=1: 10×6=60 → 100; t=3: 20×6=120 → 200; t=4: 28×6=168 → 200).
-    state.scrap += Math.ceil((produceCost(state.workshopTier) * 6) / 100) * 100;
+    // считается ДО апгрейда Цеха ниже, по тиру, который игрок видел во время уровня.
+    // Формула вынесена в `levelPassBonus` — её же использует UI для отображения
+    // в попапе результата.
+    state.scrap += levelPassBonus(state.workshopTier);
 
     const passedLevel = state.level;
     state.level += 1;
@@ -130,6 +130,21 @@ export function applyBattleResult(state: SaveState, result: BattleResult): void 
       state.pendingFieldUpgrade = true;
     }
   }
+}
+
+/**
+ * Бонус за прохождение уровня: +6× от текущей цены производства, округлённое вверх
+ * до сотен. Используется и для начисления в `applyBattleResult`, и для отображения
+ * в попапе результата (WorldScene.showResult).
+ *
+ * Примеры:
+ *   t1 (cost 10):  60 → 100
+ *   t2 (cost 14):  84 → 100
+ *   t3 (cost 20): 120 → 200
+ *   t4 (cost 28): 168 → 200
+ */
+export function levelPassBonus(workshopTier: number): number {
+  return Math.ceil((produceCost(workshopTier) * 6) / 100) * 100;
 }
 
 /** Лучший тир оружия у игрока (для контекста генерации уровня). Лутбоксы не считаются. */

@@ -28,7 +28,7 @@ import { SceneKey } from './sceneKeys';
 import { DESIGN_WIDTH, DESIGN_HEIGHT, TIER_COLORS, WEAPON_FRAME_PX } from '../config/constants';
 import type { Level, BattleResult, LootboxKind, WeaponTier, Obstacle } from '../types';
 import { getState, save, update } from '../core/storage';
-import { applyBattleResult, laneArsenals, bestWeaponTier } from '../core/progression';
+import { applyBattleResult, laneArsenals, bestWeaponTier, levelPassBonus } from '../core/progression';
 import { generateLevel } from '../core/levelGen';
 import { produceCost, canAfford } from '../core/economy';
 import { weaponName, getWeapon } from '../core/weapons';
@@ -1067,6 +1067,9 @@ export class WorldScene extends Phaser.Scene {
 
     const result = this.assembleResult();
     const state = getState();
+    // Бонус прохождения вычисляется ДО applyBattleResult — там тир может
+    // апгрейднуться, а игроку нужно показать сумму по тиру, который он видел.
+    const passBonus = result.passed ? levelPassBonus(state.workshopTier) : 0;
     applyBattleResult(state, result);
     save();
 
@@ -1094,6 +1097,7 @@ export class WorldScene extends Phaser.Scene {
       `Оружие: +${result.totalWeapons.length}`,
       lbLine,
     ];
+    if (passBonus > 0) lines.push(`Бонус прохождения: +${passBonus}`);
     const linesText = this.add.text(cx, cy - 40, lines.join('\n'), {
       fontFamily: 'monospace', fontSize: '26px', color: '#dddddd', align: 'center', lineSpacing: 12,
     }).setOrigin(0.5).setScrollFactor(0).setDepth(152);

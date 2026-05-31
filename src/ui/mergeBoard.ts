@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import type { FieldState, LootboxKind, WeaponTier } from '../types';
-import { TIER_COLORS, UI, COLORS, WEAPON_FRAME_PX } from '../config/constants';
+import { UI, WEAPON_FRAME_PX } from '../config/constants';
 import { weaponName } from '../core/weapons';
 import { canMergeIndices, mergeInto, moveOrSwap } from '../core/merge';
 import { isLootboxCode, isWeaponCellValue, lootboxKindOfCode } from '../core/lootbox';
@@ -288,19 +288,10 @@ export class MergeBoard {
     this.selectedIndex = index;
     const tile = this.tileByIndex.get(index);
     if (!tile) return;
+    // Без bg-рамки выделение — это scale-пульс + тёплый тинт на иконке оружия.
     tile.setScale(1.08);
-    // bg может быть Rectangle (fallback) или Image (figma-фрейм). Подсветка:
-    //   • Rectangle → акцент-stroke;
-    //   • Image → лёгкий tint (без потери цвета рамки).
-    const bg = tile.getData('bg') as
-      | Phaser.GameObjects.Rectangle
-      | Phaser.GameObjects.Image
-      | undefined;
-    if (bg instanceof Phaser.GameObjects.Rectangle) {
-      bg.setStrokeStyle(5, COLORS.accent, 1);
-    } else if (bg instanceof Phaser.GameObjects.Image) {
-      bg.setTint(0xfff7c0); // тёплый акцент поверх рамки
-    }
+    const icon = tile.getData('icon') as Phaser.GameObjects.Image | undefined;
+    icon?.setTint(0xfff7c0);
   }
 
   private clearSelection(): void {
@@ -308,15 +299,8 @@ export class MergeBoard {
     const tile = this.tileByIndex.get(this.selectedIndex);
     if (tile) {
       tile.setScale(1);
-      const bg = tile.getData('bg') as
-        | Phaser.GameObjects.Rectangle
-        | Phaser.GameObjects.Image
-        | undefined;
-      if (bg instanceof Phaser.GameObjects.Rectangle) {
-        bg.setStrokeStyle(3, 0x000000, 0.3);
-      } else if (bg instanceof Phaser.GameObjects.Image) {
-        bg.clearTint();
-      }
+      const icon = tile.getData('icon') as Phaser.GameObjects.Image | undefined;
+      icon?.clearTint();
     }
     this.selectedIndex = null;
   }
@@ -399,78 +383,40 @@ export class MergeBoard {
 
   private makeTile(index: number, tier: WeaponTier): Phaser.GameObjects.Container {
     const c = this.centerOf(index);
-    // ВАЖНО: `size` — это «контентный» бокс плитки для ИКОНКИ ОРУЖИЯ и tier-badge
-    // (~92% ячейки), а `frameSize` — это размер сАМОГО ФРЕЙМА-PNG, который должен
-    // точно перекрывать слот без отступа (`cellSize`). Раньше использовалось один
-    // size = 0.92 для всего, и фрейм выглядел меньше слота — отсюда видимый зазор.
-    const size = this.cellSize * 0.92;
-    const frameSize = this.cellSize;
-    const color = TIER_COLORS[tier] ?? 0x888888;
     const iconKey = `weapon.t${tier}`;
-    const frameKey = `weapon.frame.t${tier}`;
     const hasIcon = this.scene.textures.exists(iconKey);
-    const hasFrame = this.scene.textures.exists(frameKey);
 
-    // Фон плитки — либо figma-PNG `weapon.frame.t<N>` 272×272 (цвет + tier-индекс в углу),
-    // либо Rectangle-fallback на цвете тира (если ассет не загружен).
-    let bg: Phaser.GameObjects.Image | Phaser.GameObjects.Rectangle;
-    if (hasFrame) {
-      bg = this.scene.add.image(0, 0, frameKey).setOrigin(0.5).setDisplaySize(frameSize, frameSize);
-    } else {
-      // Rectangle-fallback оставлен на старом размере (size = 0.92 ячейки) — у него есть
-      // setStrokeStyle, который должен оставаться внутри ячейки и не «утыкаться» в соседей.
-      const rect = this.scene.add
-        .rectangle(0, 0, size, size, color, hasIcon ? 0.2 : 1)
-        .setOrigin(0.5);
-      rect.setStrokeStyle(3, color, 0.9);
-      bg = rect;
-    }
-
-    const children: Phaser.GameObjects.GameObject[] = [bg];
+    const children: Phaser.GameObjects.GameObject[] = [];
+    let iconObj: Phaser.GameObjects.Image | null = null;
 
     if (hasIcon) {
-      // Иконка: фрейм Figma (136px) → 85% ячейки. PNG bbox у разных оружий отличается
-      // (винтовка торчит из фрейма, нож вписан ровно) — масштабируем по эталонному
-      // WEAPON_FRAME_PX, а не по `max(iw, ih)`, чтобы сохранить относительные размеры,
-      // заложенные дизайнером в Figma (винтовка визуально длиннее ножа).
+      // Иконка оружия по центру слота. Масштаб — по эталонному фрейму Figma 272 px:
+      // винтовка визуально длиннее ножа (см. WEAPON_FRAME_PX в constants.ts).
       const tex = this.scene.textures.get(iconKey).getSourceImage();
       const iconW = (tex as { width: number }).width ?? 1;
       const iconH = (tex as { height: number }).height ?? 1;
-      const targetFrame = size * 0.85;
-      const scale = targetFrame / WEAPON_FRAME_PX;
-      const icon = this.scene.add
-        .image(0, -size * 0.04, iconKey)
+      const target = this.cellSize * 0.85;
+      const scale = target / WEAPON_FRAME_PX;
+      iconObj = this.scene.add
+        .image(0, 0, iconKey)
         .setOrigin(0.5)
         .setDisplaySize(iconW * scale, iconH * scale);
-      children.push(icon);
-      // Tier-badge рисуем В КОДЕ только если используем Rectangle-fallback. Если есть
-      // figma-фрейм — цифра тира УЖЕ встроена в правый нижний угол PNG.
-      if (!hasFrame) {
-        const tierBadge = this.scene.add
-          .text(-size * 0.4, size * 0.4, String(tier), {
-            fontFamily: 'Roboto, Arial Black, sans-serif',
-            fontStyle: '900',
-            fontSize: `${Math.round(size * 0.18)}px`,
-            color: '#ffffff',
-          })
-          .setOrigin(0.5);
-        tierBadge.setStroke('#000000', 3);
-        children.push(tierBadge);
-      }
+      children.push(iconObj);
     } else {
-      // Fallback на старый стиль (цвет + цифра тира) — если иконка не загружена.
+      // Fallback (PNG-иконка не загружена): крупная цифра тира + название мелким текстом.
       const tierTxt = this.scene.add
-        .text(0, -size * 0.12, String(tier), {
-          fontFamily: 'monospace',
-          fontSize: `${Math.round(size * 0.34)}px`,
+        .text(0, -this.cellSize * 0.10, String(tier), {
+          fontFamily: 'Inter, Roboto, Arial Black, sans-serif',
+          fontStyle: '900',
+          fontSize: `${Math.round(this.cellSize * 0.34)}px`,
           color: '#ffffff',
         })
         .setOrigin(0.5);
       tierTxt.setStroke('#000000', 4);
       const nameTxt = this.scene.add
-        .text(0, size * 0.27, weaponName(tier), {
-          fontFamily: 'monospace',
-          fontSize: `${Math.round(size * 0.12)}px`,
+        .text(0, this.cellSize * 0.27, weaponName(tier), {
+          fontFamily: 'Inter, Roboto, Arial Black, sans-serif',
+          fontSize: `${Math.round(this.cellSize * 0.12)}px`,
           color: '#ffffff',
         })
         .setOrigin(0.5);
@@ -478,8 +424,25 @@ export class MergeBoard {
       children.push(tierTxt, nameTxt);
     }
 
+    // Цифра тира в правом нижнем углу — стиль из Figma 164:49 «Tier-index»:
+    //   Inter Black 900, 28px при cellSize 136 → ≈ 0.21 × cellSize, минимум 14 для
+    //   читаемости. White + stroke 1px black + shadow (0, 1, black) — даёт чёткую
+    //   подложку из самого текста без отдельной плашки.
+    const badgeOffset = this.cellSize * 0.35;
+    const tierBadge = this.scene.add
+      .text(badgeOffset, badgeOffset, String(tier), {
+        fontFamily: 'Inter, Roboto, Arial Black, sans-serif',
+        fontStyle: '900',
+        fontSize: `${Math.max(14, Math.round(this.cellSize * 0.21))}px`,
+        color: '#ffffff',
+      })
+      .setOrigin(0.5);
+    tierBadge.setStroke('#000000', 1);
+    tierBadge.setShadow(0, 1, '#000000', 0, false, true);
+    children.push(tierBadge);
+
     const tile = this.scene.add.container(c.x, c.y, children);
-    tile.setData('bg', bg);
+    if (iconObj) tile.setData('icon', iconObj);
     tile.setDepth(10); // поверх слотов-фонов (depth=1)
     return tile;
   }

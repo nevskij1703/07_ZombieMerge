@@ -1,20 +1,19 @@
-// Детерминированная боевая симуляция по линиям. Возвращает исход + пошаговый timeline
-// (для проигрыша в BattleScene). Модель оружия: сильнейшее бьёт первым; когда его ресурс
-// кончился — следующее по силе; всё израсходовано — боец отступает. Нельзя умереть.
+// AUTOTEST-ONLY симулятор боя. Не используется в живой игре с момента полного rewrite
+// боевой логики (Task 80): рантайм-бой делает `WorldScene.tickBattle` per-frame. Этот
+// модуль остаётся для headless-прогона баланса (`core/autotest.ts` → `balance-quick.ts`
+// / `balance-deep.ts`) и boot-time self-test (`core/selfTest.ts`). Модель оружия:
+// сильнейшее бьёт первым; когда его ресурс кончился — следующее по силе; всё
+// израсходовано — боец отступает. Нельзя умереть.
 //
 // Тиры оружия для коробок/сундуков уже зашиты в Level (см. levelGen). battleSim ничего
 // не рандомит и не зависит от состояния игрока.
+//
+// ВАЖНО: при расхождении модели с WorldScene.tickBattle — autotest перестаёт отражать
+// реальный баланс. Если меняешь правила боя в WorldScene, либо обнови этот файл
+// синхронно, либо явно отметь autotest как «приблизительный» в docs/BALANCE.md.
 
 import type { Level, Lane, LaneResult, LaneStep, BattleResult, WeaponTier, LootboxKind } from '../types';
 import { getWeapon } from './weapons';
-
-// eslint-disable-next-line @typescript-eslint/no-empty-interface
-export interface BattleCtx {
-  // Поле зарезервировано для будущих расширений (например, бонусы Бойцов).
-  // Тиры наград сейчас приходят в Level из levelGen и не зависят от ctx.
-  // Сохраняем интерфейс, чтобы не ломать существующие вызовы.
-  workshopTier?: number;
-}
 
 interface ArsenalWeapon {
   tier: number;
@@ -204,7 +203,7 @@ function simulateLane(lane: Lane, tiers: number[]): LaneResult {
 }
 
 /** arsenals[i] — список тиров оружия на i-м столбце (линии). */
-export function simulateBattle(level: Level, arsenals: number[][], _ctx?: BattleCtx): BattleResult {
+export function simulateBattle(level: Level, arsenals: number[][]): BattleResult {
   const lanes = level.lanes.map((lane, i) => simulateLane(lane, arsenals[i] ?? []));
   return {
     level: level.number,

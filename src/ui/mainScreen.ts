@@ -392,10 +392,6 @@ export class MainScreenUI {
     this.btnProduce.setEnabled(canProduce);
   }
 
-  setProduceEnabled(enabled: boolean): void {
-    this.btnProduce.setEnabled(enabled);
-  }
-
   setFightEnabled(enabled: boolean): void {
     this.btnFight.setEnabled(enabled);
   }
@@ -409,7 +405,3 @@ export class MainScreenUI {
     this.btnFight.container.setVisible(visible);
   }
 }
-
-/** Удалён: bottomGradient был тут программно. Теперь общий gradient рисуется в WorldScene
- *  (метод `buildGradients`), скрывается через `setVisible` поверх top/bottom вместе. */
-

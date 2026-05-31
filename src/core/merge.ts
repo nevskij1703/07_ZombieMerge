@@ -6,22 +6,6 @@ import type { FieldState, WeaponTier } from '../types';
 import { canMergeTier, nextTier } from './weapons';
 import { isWeaponCellValue } from './lootbox';
 
-export function cellCount(f: FieldState): number {
-  return f.cols * f.rows;
-}
-
-export function indexOf(f: FieldState, col: number, row: number): number {
-  return row * f.cols + col;
-}
-
-export function colOf(f: FieldState, index: number): number {
-  return index % f.cols;
-}
-
-export function rowOf(f: FieldState, index: number): number {
-  return Math.floor(index / f.cols);
-}
-
 export function firstFreeIndex(f: FieldState): number {
   for (let i = 0; i < f.cells.length; i++) if (f.cells[i] == null) return i;
   return -1;
@@ -35,13 +19,6 @@ export function freeCount(f: FieldState): number {
   let n = 0;
   for (const c of f.cells) if (c == null) n++;
   return n;
-}
-
-export function placeAt(f: FieldState, index: number, tier: WeaponTier): boolean {
-  if (index < 0 || index >= f.cells.length) return false;
-  if (f.cells[index] != null) return false;
-  f.cells[index] = tier;
-  return true;
 }
 
 /** Положить в первую свободную клетку. Возвращает индекс или -1 если поле полно. */

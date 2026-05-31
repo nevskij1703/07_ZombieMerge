@@ -60,8 +60,8 @@ const FIGHTER_PICKUP_Y = 580;
 // ============================ Battle tuning =====================================
 
 const FIGHTER_WALK_SPEED = 0.3;        // px/ms forward
-const FIGHTER_BACKSTEP_SPEED = 0.275;  // быстрее, чем walk
-const FIGHTER_RETREAT_SPEED = 0.30;    // самая высокая (бежит на базу)
+const FIGHTER_BACKSTEP_SPEED = 0.275;  // чуть медленнее walk (отскок после ранения)
+const FIGHTER_RETREAT_SPEED = 0.30;    // как walk; бежит на базу когда оружие кончилось
 const ATTACK_RANGE = 14;               // дистанция attack contact (px между center'ами)
 const BACKSTEP_DISTANCE = 36;          // насколько отлетает после ранения
 const ZOMBIE_SPEED_RATIO = 0.25;       // от скорости бойца (зомби автоматически замедляются вместе с бойцами)
@@ -815,7 +815,7 @@ export class WorldScene extends Phaser.Scene {
     // invPlaceArt/trashPlaceArt НЕ скрываем — они часть локации, текст-лейблы на них
     // тоже остаются (scrollFactor=1) и уезжают с камерой во время боя естественно.
 
-    this.playOpeningSequence(arsenals);
+    this.playOpeningSequence();
   }
 
   private buildBattleVisuals(arsenals: number[][]): void {
@@ -932,12 +932,12 @@ export class WorldScene extends Phaser.Scene {
 
   // ============================= Opening sequence ===============================
 
-  private playOpeningSequence(arsenals: number[][]): void {
+  private playOpeningSequence(): void {
     const gateL = this.baseLocation?.byId.get('base.gate_l') ?? null;
     const gateR = this.baseLocation?.byId.get('base.gate_r') ?? null;
     const shdL = this.baseLocation?.byId.get('base.gate_l_shd') ?? null;
     const shdR = this.baseLocation?.byId.get('base.gate_r_shd') ?? null;
-    const proceed = (): void => this.spawnAndDispatchFighters(arsenals);
+    const proceed = (): void => this.spawnAndDispatchFighters();
     const leftTargets = [gateL, shdL].filter((x): x is Phaser.GameObjects.Image => x != null);
     const rightTargets = [gateR, shdR].filter((x): x is Phaser.GameObjects.Image => x != null);
     if (leftTargets.length > 0 || rightTargets.length > 0) {
@@ -963,7 +963,7 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  private spawnAndDispatchFighters(arsenals: number[][]): void {
+  private spawnAndDispatchFighters(): void {
     const cols = this.level!.cols;
     const laneStartY = GATE_Y - 10;
 
@@ -998,9 +998,6 @@ export class WorldScene extends Phaser.Scene {
         },
       });
     }
-    // Edge: arsenals для каждой линии есть, но reference неиспользуется
-    // (visual уже обновлён через laneRuntime). Параметр оставлен для совместимости.
-    void arsenals;
   }
 
   private startBattle(): void {

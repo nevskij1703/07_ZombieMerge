@@ -144,14 +144,6 @@ export interface LevelGenConfig {
   scrapPerPile: number;
 }
 
-// (removed `laneDifficultySpread`: число зомби в линии теперь одинаковое — дороги выровнены.
-// Разнообразие линий — через распределение тиров зомби и шанс коробки.)
-//
-// (removed `zombieOrderJitter`: на смену пришёл anchored shuffle в genLane — слабые зомби
-// строго в начале линии, средняя и сильная зоны перемешаны внутри. Распределение тиров
-// не меняется, общая сложность сохраняется.)
-
-
 export interface Balance {
   maxTier: number;
   weapons: Record<number, WeaponDef>;

@@ -56,13 +56,13 @@ export function battleSelfTest(): void {
 
   // Сильный арсенал на всех линиях — уровень проходится, лут собран.
   const strong = lvl.lanes.map(() => [12, 12]);
-  const win = simulateBattle(lvl, strong, { workshopTier: 1 });
+  const win = simulateBattle(lvl, strong);
   assert(win.passed, 'strong arsenal passes lvl1');
   assert(win.totalScrap > 0, 'scrap collected on win');
   assert(win.lanes.every((l) => l.steps.length > 0), 'timeline produced');
 
   // Пустые арсеналы при наличии зомби — не проходит, но не падает и собирает лом по пути.
-  const lose = simulateBattle(lvl, lvl.lanes.map(() => []), { workshopTier: 1 });
+  const lose = simulateBattle(lvl, lvl.lanes.map(() => []));
   assert(!lose.passed, 'empty arsenal fails when zombies present');
 }
 

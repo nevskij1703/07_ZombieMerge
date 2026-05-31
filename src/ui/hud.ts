@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { DESIGN_WIDTH, UI } from '../config/constants';
+import { DESIGN_WIDTH } from '../config/constants';
 import { getState } from '../core/storage';
 
 /** Top-bar главного экрана. Стили строго из figma 158:63:
@@ -108,5 +108,3 @@ export class Hud {
     this.coinText.setText(String(s.scrap));
   }
 }
-
-export const HUD_COLORS = { bg: UI.hudBg };

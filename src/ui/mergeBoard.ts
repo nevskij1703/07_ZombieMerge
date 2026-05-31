@@ -289,8 +289,18 @@ export class MergeBoard {
     const tile = this.tileByIndex.get(index);
     if (!tile) return;
     tile.setScale(1.08);
-    const bg = tile.getData('bg') as Phaser.GameObjects.Rectangle | undefined;
-    bg?.setStrokeStyle(5, COLORS.accent, 1);
+    // bg может быть Rectangle (fallback) или Image (figma-фрейм). Подсветка:
+    //   • Rectangle → акцент-stroke;
+    //   • Image → лёгкий tint (без потери цвета рамки).
+    const bg = tile.getData('bg') as
+      | Phaser.GameObjects.Rectangle
+      | Phaser.GameObjects.Image
+      | undefined;
+    if (bg instanceof Phaser.GameObjects.Rectangle) {
+      bg.setStrokeStyle(5, COLORS.accent, 1);
+    } else if (bg instanceof Phaser.GameObjects.Image) {
+      bg.setTint(0xfff7c0); // тёплый акцент поверх рамки
+    }
   }
 
   private clearSelection(): void {
@@ -298,8 +308,15 @@ export class MergeBoard {
     const tile = this.tileByIndex.get(this.selectedIndex);
     if (tile) {
       tile.setScale(1);
-      const bg = tile.getData('bg') as Phaser.GameObjects.Rectangle | undefined;
-      bg?.setStrokeStyle(3, 0x000000, 0.3);
+      const bg = tile.getData('bg') as
+        | Phaser.GameObjects.Rectangle
+        | Phaser.GameObjects.Image
+        | undefined;
+      if (bg instanceof Phaser.GameObjects.Rectangle) {
+        bg.setStrokeStyle(3, 0x000000, 0.3);
+      } else if (bg instanceof Phaser.GameObjects.Image) {
+        bg.clearTint();
+      }
     }
     this.selectedIndex = null;
   }
@@ -385,11 +402,22 @@ export class MergeBoard {
     const size = this.cellSize * 0.92;
     const color = TIER_COLORS[tier] ?? 0x888888;
     const iconKey = `weapon.t${tier}`;
+    const frameKey = `weapon.frame.t${tier}`;
     const hasIcon = this.scene.textures.exists(iconKey);
+    const hasFrame = this.scene.textures.exists(frameKey);
 
-    // Фон-рамка с цветом по тиру (тонкая «карта» под иконкой).
-    const bg = this.scene.add.rectangle(0, 0, size, size, color, hasIcon ? 0.2 : 1).setOrigin(0.5);
-    bg.setStrokeStyle(3, color, 0.9);
+    // Фон плитки — либо figma-PNG `weapon.frame.t<N>` 272×272 (цвет + tier-индекс в углу),
+    // либо Rectangle-fallback на цвете тира (если ассет не загружен).
+    let bg: Phaser.GameObjects.Image | Phaser.GameObjects.Rectangle;
+    if (hasFrame) {
+      bg = this.scene.add.image(0, 0, frameKey).setOrigin(0.5).setDisplaySize(size, size);
+    } else {
+      const rect = this.scene.add
+        .rectangle(0, 0, size, size, color, hasIcon ? 0.2 : 1)
+        .setOrigin(0.5);
+      rect.setStrokeStyle(3, color, 0.9);
+      bg = rect;
+    }
 
     const children: Phaser.GameObjects.GameObject[] = [bg];
 
@@ -408,17 +436,20 @@ export class MergeBoard {
         .setOrigin(0.5)
         .setDisplaySize(iconW * scale, iconH * scale);
       children.push(icon);
-      // Маленький tier-индикатор в углу.
-      const tierBadge = this.scene.add
-        .text(-size * 0.4, size * 0.4, String(tier), {
-          fontFamily: 'Roboto, Arial Black, sans-serif',
-          fontStyle: '900',
-          fontSize: `${Math.round(size * 0.18)}px`,
-          color: '#ffffff',
-        })
-        .setOrigin(0.5);
-      tierBadge.setStroke('#000000', 3);
-      children.push(tierBadge);
+      // Tier-badge рисуем В КОДЕ только если используем Rectangle-fallback. Если есть
+      // figma-фрейм — цифра тира УЖЕ встроена в правый нижний угол PNG.
+      if (!hasFrame) {
+        const tierBadge = this.scene.add
+          .text(-size * 0.4, size * 0.4, String(tier), {
+            fontFamily: 'Roboto, Arial Black, sans-serif',
+            fontStyle: '900',
+            fontSize: `${Math.round(size * 0.18)}px`,
+            color: '#ffffff',
+          })
+          .setOrigin(0.5);
+        tierBadge.setStroke('#000000', 3);
+        children.push(tierBadge);
+      }
     } else {
       // Fallback на старый стиль (цвет + цифра тира) — если иконка не загружена.
       const tierTxt = this.scene.add

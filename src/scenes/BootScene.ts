@@ -47,7 +47,12 @@ export class BootScene extends Phaser.Scene {
     }
   }
 
-  /** Иконки оружия по тирам (balance.weapons[N].icon → текстура weapon.t<N>). */
+  /**
+   * Иконки оружия + цветные рамки тиров (из Figma weapon_frame 164:341).
+   *   • `weapon.t<N>` ← `./art/weapons/<balance.weapons[N].icon>.png` — само оружие, 272+px.
+   *   • `weapon.frame.t<N>` ← `./art/weapons/frame_t<NN>.png` — фрейм 272×272 с цветом тира
+   *     и встроенным tier-индексом в правом нижнем углу.
+   */
   private queueWeaponAssets(): void {
     const max = balance.maxTier;
     for (let t = 1; t <= max; t++) {
@@ -56,6 +61,11 @@ export class BootScene extends Phaser.Scene {
       const key = `weapon.t${t}`;
       if (!this.textures.exists(key)) {
         this.load.image(key, `./art/weapons/${w.icon}.png`);
+      }
+      const frameKey = `weapon.frame.t${t}`;
+      const frameFile = `frame_t${t.toString().padStart(2, '0')}.png`;
+      if (!this.textures.exists(frameKey)) {
+        this.load.image(frameKey, `./art/weapons/${frameFile}`);
       }
     }
   }

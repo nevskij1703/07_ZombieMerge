@@ -82,6 +82,11 @@ export class MergeBoard {
     this.buildCells();
     this.rebuildTiles();
     this.attachInput();
+    // VFX-текстуры (spark / flash / shockwave) генерируются один раз для всей
+    // сессии через canvas radial gradient. Кешируются в scene.textures, повторные
+    // вызовы — no-op. Это позволяет рендерить sparks/flash как Image (batched
+    // single draw call) вместо Arc (Graphics, per-object vertex submission).
+    this.ensureVfxTextures();
   }
 
   /** Установить прямоугольник трэш-зоны. Drop оружия в эту область → cb.onTrash. */
@@ -426,23 +431,26 @@ export class MergeBoard {
         duration: 110,
         ease: 'Quad.In',
         onComplete: () => {
-          // Phase 5a: центральная вспышка (solid white круг, expand & fade).
+          // Phase 5a: центральная вспышка (Image из shared `merge.flash` текстуры,
+          // ADD-blend — даёт яркую засветку поверх вспышки).
           const flash = scene.add
-            .circle(toCenter.x, toCenter.y, cs * 0.4, 0xffffff, 0.9)
+            .image(toCenter.x, toCenter.y, 'merge.flash')
+            .setOrigin(0.5)
             .setDepth(60)
-            .setBlendMode(Phaser.BlendModes.ADD);
+            .setBlendMode(Phaser.BlendModes.ADD)
+            .setAlpha(0.9);
+          flash.setDisplaySize(cs * 0.24, cs * 0.24);
           scene.tweens.add({
             targets: flash,
-            scaleX: { from: 0.3, to: 1.8 },
-            scaleY: { from: 0.3, to: 1.8 },
-            alpha: { from: 0.9, to: 0 },
+            displayWidth: cs * 1.44,
+            displayHeight: cs * 1.44,
+            alpha: 0,
             duration: 200,
             ease: 'Quad.Out',
             onComplete: () => flash.destroy(),
           });
           // Phase 5b: shockwave — кольцо с резким внешним фронтом и мягким
           // fade к центру. Расширяется от cs*0.4 до cs*2.5 за 380ms.
-          this.ensureShockwaveTexture();
           const wave = scene.add
             .image(toCenter.x, toCenter.y, 'merge.shockwave')
             .setOrigin(0.5)
@@ -481,57 +489,94 @@ export class MergeBoard {
   }
 
   /**
-   * Лениво создать текстуру `merge.shockwave` — круглая 512×512 PNG (canvas)
-   * с radial gradient: прозрачный центр → soft fade → яркий peak фронт →
-   * прозрачно за пределами арки. То есть «волновое кольцо» с резкой внешней
-   * гранью и мягким спадом к центру. Используется как Image в Phase 5b VFX.
+   * Лениво создать 3 canvas-текстуры для VFX мерджа. Все три — radial gradient.
+   * Кешируются в `scene.textures` глобально, повторные вызовы — no-op.
    *
-   * Idempotent — повторные вызовы возвращают сразу.
+   *   • `merge.spark`     — 32×32 жёлтый soft-dot для летящих искр (8 на мердж).
+   *   • `merge.flash`     — 128×128 яркий центральный круг для вспышки.
+   *   • `merge.shockwave` — 512×512 кольцо с резкой внешней гранью + soft inward.
+   *
+   * Использовать Image (texture-based) вместо Arc/Circle (Graphics) даёт batch
+   * rendering: Phaser отправляет sparks одной текстуры одним draw call в GPU.
    */
-  private ensureShockwaveTexture(): void {
-    const KEY = 'merge.shockwave';
-    if (this.scene.textures.exists(KEY)) return;
-    const SIZE = 512;
-    const canvas = document.createElement('canvas');
-    canvas.width = SIZE;
-    canvas.height = SIZE;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const cx = SIZE / 2;
-    const cy = SIZE / 2;
-    const r = SIZE / 2 - 4;
-    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-    grad.addColorStop(0.0, 'rgba(255, 255, 255, 0.0)');
-    grad.addColorStop(0.55, 'rgba(255, 255, 255, 0.04)');
-    grad.addColorStop(0.82, 'rgba(255, 255, 255, 0.35)');
-    grad.addColorStop(0.94, 'rgba(255, 255, 255, 1.0)');
-    grad.addColorStop(1.0, 'rgba(255, 255, 255, 0.0)');
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.fill();
-    this.scene.textures.addCanvas(KEY, canvas);
+  private ensureVfxTextures(): void {
+    this.makeRadialTexture(
+      'merge.spark',
+      32,
+      [
+        [0.0, 'rgba(255, 244, 179, 1.0)'],
+        [0.5, 'rgba(255, 244, 179, 0.55)'],
+        [1.0, 'rgba(255, 244, 179, 0.0)'],
+      ],
+    );
+    this.makeRadialTexture(
+      'merge.flash',
+      128,
+      [
+        [0.0, 'rgba(255, 255, 255, 1.0)'],
+        [0.6, 'rgba(255, 255, 255, 0.9)'],
+        [1.0, 'rgba(255, 255, 255, 0.0)'],
+      ],
+    );
+    this.makeRadialTexture(
+      'merge.shockwave',
+      512,
+      [
+        [0.0, 'rgba(255, 255, 255, 0.0)'],
+        [0.55, 'rgba(255, 255, 255, 0.04)'],
+        [0.82, 'rgba(255, 255, 255, 0.35)'],
+        [0.94, 'rgba(255, 255, 255, 1.0)'],
+        [1.0, 'rgba(255, 255, 255, 0.0)'],
+      ],
+    );
   }
 
-  /** 10 «искр» (ADD-blend белые точки) летят к target с разных радиусов 1.0-1.6 × cellSize. */
+  /** Один helper для создания radial-gradient PNG-текстуры через canvas. */
+  private makeRadialTexture(key: string, size: number, stops: Array<[number, string]>): void {
+    if (this.scene.textures.exists(key)) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const c = size / 2;
+    const r = size / 2 - 1;
+    const grad = ctx.createRadialGradient(c, c, 0, c, c, r);
+    for (const [stop, color] of stops) grad.addColorStop(stop, color);
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(c, c, r, 0, Math.PI * 2);
+    ctx.fill();
+    this.scene.textures.addCanvas(key, canvas);
+  }
+
+  /**
+   * 8 «искр» (Image из `merge.spark`, ADD-blend) летят к target с разных
+   * радиусов 1.0-1.6 × cellSize. duration варьируется per-spark (65-100%
+   * базового) — частицы не приходят в один кадр.
+   */
   private spawnMergeSparks(target: { x: number; y: number }, duration: number): void {
-    const COUNT = 10;
+    const COUNT = 8;
     const cs = this.cellSize;
     for (let i = 0; i < COUNT; i++) {
       const angle = (Math.PI * 2 * i) / COUNT + (Math.random() - 0.5) * 0.4;
       const radius = cs * (1.0 + Math.random() * 0.6);
       const sx = target.x + Math.cos(angle) * radius;
       const sy = target.y + Math.sin(angle) * radius;
+      const sizePx = 7 + Math.random() * 4; // 7-11 px видимый диаметр
       const spark = this.scene.add
-        .circle(sx, sy, 3 + Math.random() * 2, 0xfff4b3, 1)
+        .image(sx, sy, 'merge.spark')
+        .setOrigin(0.5)
         .setDepth(40)
         .setBlendMode(Phaser.BlendModes.ADD);
+      spark.setDisplaySize(sizePx, sizePx);
       this.scene.tweens.add({
         targets: spark,
         x: target.x,
         y: target.y,
-        scale: { from: 1, to: 0.2 },
-        alpha: { from: 1, to: 0 },
+        scaleX: spark.scaleX * 0.2,
+        scaleY: spark.scaleY * 0.2,
+        alpha: 0,
         duration: duration * (0.65 + Math.random() * 0.35),
         ease: 'Quad.In',
         onComplete: () => spark.destroy(),

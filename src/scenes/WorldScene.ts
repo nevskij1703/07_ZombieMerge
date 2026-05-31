@@ -272,7 +272,7 @@ export class WorldScene extends Phaser.Scene {
     this.refreshButtons();
   }
 
-  update(): void {
+  update(_time: number, delta: number): void {
     // Если редактор подвинул trash — обновить hit-area drop-зоны.
     this.syncTrashRect();
     if (this.mode !== 'battle' && this.mode !== 'transition' && this.mode !== 'returning') return;
@@ -280,7 +280,16 @@ export class WorldScene extends Phaser.Scene {
     // [EXP: zombie-movement] зомби двигаются только когда бой идёт. В transition их
     // не двигаем (бойцы ещё на базе, fighter[li] на Y=540 — зомби бы пошли в base).
     if (ZOMBIE_MOVEMENT_ENABLED && (this.mode === 'battle' || this.mode === 'returning')) {
-      this.tickZombieMovement();
+      // Защитный try/catch — даже если экспериментальная фича выбросит ошибку,
+      // главный update loop не должен ломаться, иначе сцена встанет колом.
+      try {
+        // Clamp delta: на стыках режимов / при tab-switch delta может быть огромной
+        // или NaN. Безопасный диапазон [0, 50] = до 3 кадров при 60fps.
+        const safeDelta = Math.min(Math.max(0, delta || 0), 50);
+        this.tickZombieMovement(safeDelta);
+      } catch (e) {
+        console.error('[EXP: zombie-movement] tick failed', e);
+      }
     }
   }
 
@@ -289,16 +298,15 @@ export class WorldScene extends Phaser.Scene {
   /** Каждый кадр двигает зомби/коробки вниз (к воротам) с учётом:
    *  видимости в камере, наличия бойца на линии, collision с другими obstacle'ами,
    *  stun после удара. Лом (scrap) не двигается и не блокирует. */
-  private tickZombieMovement(): void {
+  private tickZombieMovement(dt: number): void {
     if (!this.level) return;
     const cam = this.cameras.main;
     const viewTopY = cam.scrollY;
     const viewBotY = cam.scrollY + DESIGN_HEIGHT;
     const now = this.time.now;
-    const dt = this.game.loop.delta;
     // Скорость бойца = 1/PIXEL_TIME px/ms. Зомби = доля от неё.
     const speed = (1 / this.PIXEL_TIME) * ZOMBIE_SPEED_RATIO;
-    const dy = speed * dt;
+    const dy = Math.min(speed * dt, 8); // защитный cap — макс 8px за тик
     const tokenSize = this.obstacleTokenSize || 44;
     // Hard limit: ниже ворот зомби не пойдёт никогда (даже если боец отступил за ворота).
     const gateLimitY = GATE_Y - tokenSize / 2;
@@ -1347,8 +1355,11 @@ export class WorldScene extends Phaser.Scene {
     }
     if (token) {
       // [EXP: zombie-movement] stun до конца backstep'a бойца — зомби не наступает,
-      // пока боец откатывается, потом снова начинает идти.
-      token.setData('stunnedUntil', this.time.now + ZOMBIE_STUN_MS);
+      // пока боец откатывается, потом снова начинает идти. Защита: setData может
+      // отсутствовать у нестандартных объектов (хотя у Circle/Rectangle есть всегда).
+      if (typeof (token as { setData?: unknown }).setData === 'function') {
+        (token as Phaser.GameObjects.GameObject).setData('stunnedUntil', this.time.now + ZOMBIE_STUN_MS);
+      }
       this.tweens.add({ targets: token, alpha: 0.55, yoyo: true, duration: 90 });
     }
 

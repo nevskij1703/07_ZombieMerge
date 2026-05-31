@@ -36,45 +36,54 @@ interface UiButton {
 const BUTTON_DEPTH = 100;
 const FONT = 'Roboto, Arial Black, sans-serif';
 
-/** Стандартный press-эффект: при удержании — squash + затемнение, при отпускании — bounce.
- *  Применяется к bg-слою (Image), визуально дёргает весь контейнер через tween scale. */
+/**
+ * Press-эффект из figma: верхняя грань кнопки (вместе со ВСЕМ контентом) опускается
+ * вниз на `pressDepth` px, толщина 3D-объёма становится нулевой, нижняя граница не
+ * двигается. Поверх кнопки появляется чёрный overlay 20% (даёт эффект «нажатой»).
+ *
+ * Реализация:
+ *   • bg (SVG Image) НЕ двигается — у нас нет отдельного pressed-ассета, и физически
+ *     "уменьшить" 3D-объём SVG нельзя без замены текстуры. Но контент опускается на
+ *     pressDepth — глаз воспринимает это как «кнопка вжалась».
+ *   • contentLayer (Container с label/icons) сдвигается по y на pressDepth.
+ *   • overlay (Rectangle alpha=0.2 black) делается visible.
+ *
+ * Без tween — мгновенное переключение state, как в figma.
+ */
 function attachPressEffect(
-  scene: Phaser.Scene,
   bg: Phaser.GameObjects.Image,
-  container: Phaser.GameObjects.Container,
+  contentLayer: Phaser.GameObjects.Container,
+  overlay: Phaser.GameObjects.Rectangle,
+  pressDepth: number,
   getEnabled: () => boolean,
-  enabledTint: number = 0xffffff,
 ): void {
-  const PRESS_SCALE = 0.94;
-  const RELEASE_BOUNCE = 1.04;
   let pressed = false;
   const release = (): void => {
     if (!pressed) return;
     pressed = false;
-    bg.setTint(getEnabled() ? enabledTint : 0x707070);
-    scene.tweens.killTweensOf(container);
-    scene.tweens.add({
-      targets: container,
-      scaleX: RELEASE_BOUNCE, scaleY: RELEASE_BOUNCE,
-      duration: 70, yoyo: true, ease: 'Sine.Out',
-      onComplete: () => container.setScale(1),
-    });
+    contentLayer.y -= pressDepth;
+    overlay.setVisible(false);
   };
   bg.on('pointerdown', () => {
     if (!getEnabled()) return;
     pressed = true;
-    bg.setTint(0x9a9a9a); // лёгкое затемнение
-    scene.tweens.killTweensOf(container);
-    scene.tweens.add({
-      targets: container,
-      scaleX: PRESS_SCALE, scaleY: PRESS_SCALE,
-      duration: 70, ease: 'Sine.Out',
-    });
+    contentLayer.y += pressDepth;
+    overlay.setVisible(true);
   });
   bg.on('pointerup', release);
   bg.on('pointerout', release);
   bg.on('pointerupoutside', release);
 }
+
+/** Прозрачный rectangle 20% black для press-overlay. Origin центр, hidden по умолчанию. */
+function makePressOverlay(scene: Phaser.Scene, w: number, h: number): Phaser.GameObjects.Rectangle {
+  return scene.add.rectangle(0, 0, w, h, 0x000000, 0.2).setOrigin(0.5).setVisible(false);
+}
+
+/** Цвет лейбла кнопки в disabled-state (тёмно-серый, читаемо но явно «неактивно»). */
+const DISABLED_LABEL_COLOR = '#555555';
+/** Tint bg-кнопки в disabled-state — десатурация ближе к серому. */
+const DISABLED_BG_TINT = 0x808080;
 
 export class MainScreenUI {
   readonly btnProfile: UiButton;
@@ -134,12 +143,10 @@ export class MainScreenUI {
     const produceCy = 1120 + 62;
     const produceContainer = scene.add.container(produceCx, produceCy);
     const produceBg = scene.add.image(0, 0, 'ui.btn_green').setOrigin(0.5).setDisplaySize(252, 123);
+    // contentLayer внутри кнопки — всё, что должно «утопать» при press.
+    const produceContent = scene.add.container(0, 0);
 
-    // Figma 158:206 (Frame 10, produce, 252×123). Все координаты — в координатах
-    // ОТНОСИТЕЛЬНО центра кнопки (= local figma + button_center{126,61.5}, минус center).
-    //
     // «ПРОИЗВЕСТИ» — style_0T45C1 Roboto Black 900 32px, white + stroke #000 1px.
-    //   figma local (17, 9, 217×47) → центр (125.5, 32.5) → button-center (-0.5, -29).
     this.produceLabel = scene.add
       .text(0, -29, 'ПРОИЗВЕСТИ', {
         fontFamily: FONT,
@@ -150,17 +157,8 @@ export class MainScreenUI {
       .setOrigin(0.5);
     this.produceLabel.setStroke('#000000', 1);
 
-    // ⇄ arrows-icon (figma 158:54) — figma local (112, 62, 28×35) → центр (126, 79.5) →
-    // button-center (0, 18). По центру кнопки горизонтально, чуть ниже центра вертикально.
     const arrowsIcon = scene.add.image(0, 18, 'ui.arrows').setOrigin(0.5).setDisplaySize(28, 35);
 
-    // Group 2 (right): coin + «999». figma group at (152, 59, 87×38) → центр (195.5, 78) →
-    // button-center (69.5, 16.5). Внутри группы:
-    //   • text «999»: layout_IK5T4U at (0, 0, 56×38), LEFT-CENTER origin, style_YVVPXH
-    //     Roboto Black 900 32px, white + stroke #000 1px.
-    //     button-center: (152+0-126, 59+19-61.5) = (26, 16.5), origin (0, 0.5).
-    //   • coin: layout_L1CYB8 at (61, 6, 26×26), CENTER origin.
-    //     button-center: (152+74-126, 59+19-61.5) = (100, 16.5).
     this.produceCostText = scene.add
       .text(26, 16, '0', {
         fontFamily: FONT,
@@ -175,11 +173,6 @@ export class MainScreenUI {
       .setOrigin(0.5)
       .setDisplaySize(26, 26);
 
-    // Иконка оружия = PNG-текстура `weapon.t<N>` (заглушка-плейсхолдер на T1 — позже
-    // refresh() заменит на актуальный тир из workshopTier через setTexture).
-    // Маленькая цифра тира — в правом нижнем углу иконки, стиль ровно как на
-    // merge-плитке (Inter Black 900, #B7916B, без stroke/shadow). Раньше тут было
-    // большое «T1» с обводкой — оставшийся артефакт черновой вёрстки.
     this.produceWeaponIcon = scene.add.image(-100, 16, 'weapon.t1').setOrigin(0.5);
     this.produceWeaponTier = scene.add
       .text(-100 + 20, 16 + 20, '?', {
@@ -190,12 +183,14 @@ export class MainScreenUI {
       })
       .setOrigin(0.5);
 
-    produceContainer.add([
-      produceBg, this.produceLabel,
+    produceContent.add([
+      this.produceLabel,
       this.produceWeaponIcon, this.produceWeaponTier,
       arrowsIcon,
       produceCoin, this.produceCostText,
     ]);
+    const produceOverlay = makePressOverlay(this.scene, 252, 123);
+    produceContainer.add([produceBg, produceContent, produceOverlay]);
     this.produceContainer = produceContainer;
     produceContainer.setSize(252, 123).setScrollFactor(0).setDepth(BUTTON_DEPTH);
     produceBg.setInteractive({ useHandCursor: true });
@@ -209,10 +204,27 @@ export class MainScreenUI {
       enabled: true,
       setEnabled: (e: boolean) => {
         this.btnProduce.enabled = e;
-        produceBg.setTint(e ? 0xffffff : 0x707070);
+        if (e) {
+          produceBg.clearTint();
+          this.produceLabel.setColor('#FFFFFF').setStroke('#000000', 1);
+          this.produceCostText.setColor('#FFFFFF').setStroke('#000000', 1);
+          this.produceWeaponIcon.clearTint();
+          this.produceWeaponTier.setColor('#B7916B');
+          arrowsIcon.clearTint();
+          produceCoin.clearTint();
+        } else {
+          produceBg.setTint(DISABLED_BG_TINT);
+          this.produceLabel.setColor(DISABLED_LABEL_COLOR).setStroke('#000000', 0);
+          this.produceCostText.setColor(DISABLED_LABEL_COLOR).setStroke('#000000', 0);
+          // Иконку оружия и tier-цифру десатурируем тинтом тоже.
+          this.produceWeaponIcon.setTint(DISABLED_BG_TINT);
+          this.produceWeaponTier.setColor(DISABLED_LABEL_COLOR);
+          arrowsIcon.setTint(DISABLED_BG_TINT);
+          produceCoin.setTint(DISABLED_BG_TINT);
+        }
       },
     };
-    attachPressEffect(this.scene, produceBg, produceContainer, () => this.btnProduce.enabled);
+    attachPressEffect(produceBg, produceContent, produceOverlay, 9, () => this.btnProduce.enabled);
 
     // ============== В БОЙ! — жёлтая (figma 519, 1049, 180×70) ==============
     this.btnFight = this.makeFightButton(519 + 90, 1049 + 35, 180, 70, () => cb.onBattle());
@@ -229,6 +241,8 @@ export class MainScreenUI {
   ): UiButton {
     const container = this.scene.add.container(cx, cy);
     const bg = this.scene.add.image(0, 0, bgKey).setOrigin(0.5).setDisplaySize(w, h);
+    // contentLayer — отдельный sub-container, в нём всё что должно «утопать» при press.
+    const contentLayer = this.scene.add.container(0, 0);
     const icon = this.scene.add
       .image(0, iconOpts.iconOffsetY, iconKey)
       .setOrigin(0.5)
@@ -243,7 +257,10 @@ export class MainScreenUI {
         color: '#773F17',
       })
       .setOrigin(0.5);
-    container.add([bg, icon, lbl]);
+    contentLayer.add([icon, lbl]);
+    // Overlay поверх всего — 20% black, hidden by default.
+    const overlay = makePressOverlay(this.scene, w, h);
+    container.add([bg, contentLayer, overlay]);
     container.setSize(w, h).setScrollFactor(0).setDepth(BUTTON_DEPTH);
     bg.setInteractive({ useHandCursor: true });
     bg.on('pointerup', () => {
@@ -255,12 +272,18 @@ export class MainScreenUI {
       enabled: true,
       setEnabled: (e: boolean) => {
         btn.enabled = e;
-        bg.setTint(e ? 0xffffff : 0x707070);
-        lbl.setAlpha(e ? 1 : 0.5);
-        icon.setAlpha(e ? 1 : 0.5);
+        if (e) {
+          bg.clearTint();
+          lbl.setColor('#773F17');
+          icon.clearTint();
+        } else {
+          bg.setTint(DISABLED_BG_TINT);
+          lbl.setColor(DISABLED_LABEL_COLOR);
+          icon.setTint(DISABLED_BG_TINT);
+        }
       },
     };
-    attachPressEffect(this.scene, bg, container, () => btn.enabled);
+    attachPressEffect(bg, contentLayer, overlay, 6, () => btn.enabled);
     return btn;
   }
 
@@ -269,7 +292,7 @@ export class MainScreenUI {
   private makeFightButton(cx: number, cy: number, w: number, h: number, onClick: () => void): UiButton {
     const container = this.scene.add.container(cx, cy);
     const bg = this.scene.add.image(0, 0, 'ui.btn_yellow').setOrigin(0.5).setDisplaySize(w, h);
-    // Row внутри: icon 39×38 + text. row высота 48, top 9 → центр относительно bg (35-35=0 по cy, -2 по cy).
+    const contentLayer = this.scene.add.container(0, 0);
     const icon = this.scene.add.image(-45, -2, 'ui.fight').setOrigin(0.5).setDisplaySize(39, 38);
     const lbl = this.scene.add
       .text(20, -2, 'В БОЙ!', {
@@ -280,7 +303,9 @@ export class MainScreenUI {
       })
       .setOrigin(0.5);
     lbl.setStroke('#FFD17C', 1);
-    container.add([bg, icon, lbl]);
+    contentLayer.add([icon, lbl]);
+    const overlay = makePressOverlay(this.scene, w, h);
+    container.add([bg, contentLayer, overlay]);
     container.setSize(w, h).setScrollFactor(0).setDepth(BUTTON_DEPTH);
     bg.setInteractive({ useHandCursor: true });
     bg.on('pointerup', () => {
@@ -292,12 +317,19 @@ export class MainScreenUI {
       enabled: true,
       setEnabled: (e: boolean) => {
         btn.enabled = e;
-        bg.setTint(e ? 0xffffff : 0x707070);
-        lbl.setAlpha(e ? 1 : 0.5);
-        icon.setAlpha(e ? 1 : 0.5);
+        if (e) {
+          bg.clearTint();
+          lbl.setColor('#5C2F0D').setStroke('#FFD17C', 1);
+          icon.clearTint();
+        } else {
+          bg.setTint(DISABLED_BG_TINT);
+          // Тёмно-серый текст БЕЗ обводки — по описанию figma disabled.
+          lbl.setColor(DISABLED_LABEL_COLOR).setStroke('#000000', 0);
+          icon.setTint(DISABLED_BG_TINT);
+        }
       },
     };
-    attachPressEffect(this.scene, bg, container, () => btn.enabled);
+    attachPressEffect(bg, contentLayer, overlay, 6, () => btn.enabled);
     return btn;
   }
 

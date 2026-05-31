@@ -463,9 +463,10 @@ export class WorldScene extends Phaser.Scene {
 
     if (ob.hp <= 0) {
       // Killed — забрать лут, продолжить движение.
-      if (ob.kind === 'crate') {
-        lane.scrapCollected += ob.scrap;
-        if (ob.givesWeapon) this.refillBestWeapon(lane);
+      // Coробка даёт ТОЛЬКО refill ресурса самого крутого оружия (если givesWeapon=true).
+      // НЕ выдаёт scrap — он приходит только из лома на земле и из сундуков.
+      if (ob.kind === 'crate' && ob.givesWeapon) {
+        this.refillBestWeapon(lane);
       }
       this.killObstacle(ob);
       // На следующем tick'е перейдём к следующему target.

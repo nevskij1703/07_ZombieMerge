@@ -228,14 +228,16 @@ export class MainScreenUI {
       setEnabled: (e: boolean) => {
         this.btnProduce.enabled = e;
         if (e) {
-          clearDisabledFx(produceContainer);
-          this.produceLabel.setStroke('#000000', 1);
-          this.produceCostText.setStroke('#000000', 1);
+          // Default: исходная зелёная SVG + белый текст с чёрной обводкой.
+          produceBg.setTexture('ui.btn_green');
+          this.produceLabel.setColor('#FFFFFF').setStroke('#000000', 1);
+          this.produceCostText.setColor('#FFFFFF').setStroke('#000000', 1);
         } else {
-          applyDisabledFx(produceContainer);
-          // Stroke на тексте убираем — figma явно говорит «текст без обводки» в disabled.
-          this.produceLabel.setStroke('#000000', 0);
-          this.produceCostText.setStroke('#000000', 0);
+          // Disabled: pixel-perfect figma-ассет btn_green_disabled (серое тело +
+          // drop-shadow). Текст — #4C4C4C без обводки (по описанию figma).
+          produceBg.setTexture('ui.btn_green_disabled');
+          this.produceLabel.setColor('#4C4C4C').setStroke('#000000', 0);
+          this.produceCostText.setColor('#4C4C4C').setStroke('#000000', 0);
         }
       },
     };

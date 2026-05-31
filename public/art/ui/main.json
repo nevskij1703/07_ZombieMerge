@@ -17,6 +17,7 @@
   "svgs": [
     { "image": "btn_brown", "width": 94, "height": 98 },
     { "image": "btn_green", "width": 252, "height": 123 },
+    { "image": "btn_green_disabled", "width": 255, "height": 130 },
     { "image": "btn_yellow", "width": 180, "height": 70 },
     { "image": "merge_slot", "width": 136, "height": 136 }
   ],

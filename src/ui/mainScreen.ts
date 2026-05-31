@@ -177,17 +177,18 @@ export class MainScreenUI {
 
     // Иконка оружия = PNG-текстура `weapon.t<N>` (заглушка-плейсхолдер на T1 — позже
     // refresh() заменит на актуальный тир из workshopTier через setTexture).
-    // button-center: иконка at (-100, 16), tier-badge at (-26, 16).
+    // Маленькая цифра тира — в правом нижнем углу иконки, стиль ровно как на
+    // merge-плитке (Inter Black 900, #B7916B, без stroke/shadow). Раньше тут было
+    // большое «T1» с обводкой — оставшийся артефакт черновой вёрстки.
     this.produceWeaponIcon = scene.add.image(-100, 16, 'weapon.t1').setOrigin(0.5);
     this.produceWeaponTier = scene.add
-      .text(-26, 16, 'T?', {
-        fontFamily: FONT,
+      .text(-100 + 20, 16 + 20, '?', {
+        fontFamily: 'Inter, Roboto, Arial Black, sans-serif',
         fontStyle: '900',
-        fontSize: '32px',
-        color: '#FFFFFF',
+        fontSize: '18px',
+        color: '#B7916B',
       })
-      .setOrigin(1, 0.5);
-    this.produceWeaponTier.setStroke('#000000', 1);
+      .setOrigin(0.5);
 
     produceContainer.add([
       produceBg, this.produceLabel,
@@ -322,7 +323,7 @@ export class MainScreenUI {
         this.produceWeaponIcon.setTint(TIER_COLORS[s.workshopTier] ?? 0xcccccc);
       }
     }
-    this.produceWeaponTier.setText(`T${s.workshopTier}`);
+    this.produceWeaponTier.setText(String(s.workshopTier));
     this.produceCostText.setText(String(cost));
     const canProduce = s.scrap >= cost && !isFull(s.field);
     this.btnProduce.setEnabled(canProduce);

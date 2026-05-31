@@ -675,6 +675,39 @@ export class WorldScene extends Phaser.Scene {
     const size = 54;
     const y = lane.chestY - size / 2 - 18;
     const container = this.add.container(x, y).setDepth(15);
+
+    // Weapon-награда: иконка оружия из weapon.t<N> + tier-digit в углу — в том же
+    // стиле, что плитки на merge-поле. Если PNG-иконка не загружена — fallback на
+    // старый цветной rectangle с цифрой (handled ниже в общем блоке).
+    if (chestDef.reward === 'weapon') {
+      const t = chestDef.weaponTier ?? 1;
+      const iconKey = `weapon.t${t}`;
+      if (this.textures.exists(iconKey)) {
+        const tex = this.textures.get(iconKey).getSourceImage();
+        const iw = (tex as { width: number }).width ?? 1;
+        const ih = (tex as { height: number }).height ?? 1;
+        const target = size * 0.85;
+        const scale = target / WEAPON_FRAME_PX;
+        const icon = this.add.image(0, 0, iconKey).setOrigin(0.5)
+          .setDisplaySize(iw * scale, ih * scale);
+        // Tier digit — Inter Black 900, цвет #B7916B без обводки, в правом нижнем
+        // углу. Размер пропорционален size (54 здесь, ~13px против 32px@136 в merge).
+        const tierFont = Math.max(10, Math.round(size * 32 / 136));
+        const tierBadge = this.add.text(size * 0.35, size * 0.35, String(t), {
+          fontFamily: 'Inter, Roboto, Arial Black, sans-serif',
+          fontStyle: '900',
+          fontSize: `${tierFont}px`,
+          color: '#B7916B',
+        }).setOrigin(0.5);
+        container.add([icon, tierBadge]);
+        container.setScale(0);
+        this.tweens.add({ targets: container, scale: 1, duration: 240, ease: 'Back.Out' });
+        this.battleNodes.push(container);
+        return;
+      }
+    }
+
+    // Scrap / lootbox / weapon-fallback: цветной квадратик с подписью.
     let fillColor = 0x888888;
     let labelTxt = '';
     let labelColor = '#ffffff';
@@ -687,6 +720,7 @@ export class WorldScene extends Phaser.Scene {
       labelColor = '#9fe870';
       labelFontFactor = 0.4;
     } else if (chestDef.reward === 'weapon') {
+      // PNG не загружено → старый visual (этот путь редкий, но оставлен).
       const t = chestDef.weaponTier ?? 1;
       fillColor = TIER_COLORS[t] ?? 0x888888;
       labelTxt = String(t);

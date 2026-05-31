@@ -59,12 +59,12 @@ const FIGHTER_PICKUP_Y = 580;
 
 // ============================ Battle tuning =====================================
 
-const FIGHTER_WALK_SPEED = 0.42;       // px/ms forward
-const FIGHTER_BACKSTEP_SPEED = 0.55;   // быстрее, чем walk
-const FIGHTER_RETREAT_SPEED = 0.60;    // самая высокая (бежит на базу)
+const FIGHTER_WALK_SPEED = 0.21;       // px/ms forward (×0.5 от прошлого — общее замедление)
+const FIGHTER_BACKSTEP_SPEED = 0.275;  // быстрее, чем walk
+const FIGHTER_RETREAT_SPEED = 0.30;    // самая высокая (бежит на базу)
 const ATTACK_RANGE = 14;               // дистанция attack contact (px между center'ами)
 const BACKSTEP_DISTANCE = 36;          // насколько отлетает после ранения
-const ZOMBIE_SPEED_RATIO = 0.25;       // от скорости бойца
+const ZOMBIE_SPEED_RATIO = 0.25;       // от скорости бойца (зомби автоматически замедляются вместе с бойцами)
 const ZOMBIE_STUN_MS = 200;            // не двигается после удара (= ~backstep duration)
 const ZOMBIE_STOP_MARGIN = 6;          // зазор перед бойцом/др зомби
 const CHEST_APPROACH_DIST = 50;        // когда бой подошёл к сундук area
@@ -247,7 +247,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.mode === 'battle') {
       try {
         const safeDelta = Math.min(Math.max(0, delta || 0), 50);
-        // Применяем speedFactor → slow-mo (×0.25) / norm (×1) / fast (×4). `tweens.
+        // Применяем speedFactor → slow-mo (×0.5) / norm (×1) / fast (×4). `tweens.
         // timeScale` + `time.timeScale` параллельно ускоряют tween-анимации (chest
         // open, wound flash) — синхронно с per-tick движением.
         const scaledDelta = safeDelta * this.speedFactor;
@@ -921,7 +921,7 @@ export class WorldScene extends Phaser.Scene {
     this.skipBtn.setDepth(100);
 
     const speeds: Array<{ factor: number; label: string }> = [
-      { factor: 0.25, label: '×0.25' }, { factor: 1, label: '×1' }, { factor: 4, label: '×4' },
+      { factor: 0.5, label: '×0.5' }, { factor: 1, label: '×1' }, { factor: 4, label: '×4' },
     ];
     speeds.forEach((s, i) => {
       const btn = new Button(this, {

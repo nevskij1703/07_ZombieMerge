@@ -149,7 +149,7 @@ World Y axis (positive grows down):
                    ↳ 885..959: инвентарь (слева) + ТРЭШ (справа)
                    ↳ 1010: «Произвести»
                    ↳ 1112: «В БОЙ»
-                   ↳ 1210: СКИП + speed (×0.25/×1/×4) при бое — scrollFactor=0
+                   ↳ 1210: СКИП + speed (×0.5/×1/×4) при бое — scrollFactor=0
   Y > 1280       : off-screen below (куда уходят отступающие)
 
 Camera:

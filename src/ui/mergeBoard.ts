@@ -231,12 +231,13 @@ export class MergeBoard {
     if (existing && existing.alpha < 0.5) return;
     const value = this.field.cells[index];
 
-    // Тап по лутбоксу — открыть его (без выделения/мерджа).
+    // Тап по лутбоксу — открыть его (без выделения/мерджа). State мутируется
+    // снаружи (cb.onOpenLootbox), а визуал отыгрываем здесь через VFX.
     if (isLootboxCode(value)) {
       this.clearSelection();
       const kind = lootboxKindOfCode(value);
       if (kind && this.cb.onOpenLootbox?.(index, kind)) {
-        this.rebuildTiles();
+        this.playLootboxOpenVfx(index);
         this.cb.onChange();
       }
       return;
@@ -548,6 +549,104 @@ export class MergeBoard {
     ctx.arc(c, c, r, 0, Math.PI * 2);
     ctx.fill();
     this.scene.textures.addCanvas(key, canvas);
+  }
+
+  /**
+   * VFX открытия лутбокса (~460 ms всего):
+   *   Phase 1 (0-80ms):    старая плитка-лутбокс пухнет до scaleX/Y 1.3 (Quad.Out).
+   *   Phase 2 (80-180ms):  схлопывается до 0, alpha → 0 (Quad.In), destroy.
+   *   Phase 3 (180+ms):    new weapon-плитка fade-in (Back.Out, 280ms) с scale 0.3→1.
+   *   Параллельно (0-500ms): мини-салют — 12 искр летят НАРУЖУ от центра ячейки.
+   *
+   * State уже мутирован снаружи (`cb.onOpenLootbox`), this.field.cells[idx]
+   * содержит тир оружия. Создание new-плитки делегируем `makeTile`.
+   */
+  private playLootboxOpenVfx(index: number): void {
+    const oldTile = this.tileByIndex.get(index);
+    if (!oldTile) {
+      // Плитки нет (relayout?) — fallback на мгновенный rebuild.
+      this.rebuildTiles();
+      return;
+    }
+    this.tileByIndex.delete(index);
+    const center = this.centerOf(index);
+    const scene = this.scene;
+
+    // Phase 1: пухнем.
+    scene.tweens.add({
+      targets: oldTile,
+      scaleX: 1.3,
+      scaleY: 1.3,
+      duration: 80,
+      ease: 'Quad.Out',
+      onComplete: () => {
+        // Phase 2: схлопываемся и destroy.
+        if (!oldTile.active) return;
+        scene.tweens.add({
+          targets: oldTile,
+          scaleX: 0,
+          scaleY: 0,
+          alpha: 0,
+          duration: 100,
+          ease: 'Quad.In',
+          onComplete: () => {
+            if (oldTile.active) oldTile.destroy();
+          },
+        });
+      },
+    });
+
+    // Параллельно — мини-салют.
+    this.spawnLootboxFireworks(center);
+
+    // Phase 3: новая weapon-плитка появляется (через 180ms — когда old схлопнулся).
+    scene.time.delayedCall(180, () => {
+      // Если другой код уже создал плитку на этой клетке (drop/merge во время VFX)
+      // — не дублируем.
+      if (this.tileByIndex.has(index)) return;
+      const v = this.field.cells[index];
+      if (!isWeaponCellValue(v)) return;
+      const newTile = this.makeTile(index, v);
+      newTile.setAlpha(0).setScale(0.3);
+      this.tileByIndex.set(index, newTile);
+      scene.tweens.add({
+        targets: newTile,
+        alpha: 1,
+        scaleX: 1,
+        scaleY: 1,
+        duration: 280,
+        ease: 'Back.Out',
+      });
+    });
+  }
+
+  /** 12 «искр» — ADD-blend Image из `merge.spark` — разлетаются НАРУЖУ от центра.
+   *  Используется при открытии лутбокса (мини-салют). */
+  private spawnLootboxFireworks(center: { x: number; y: number }): void {
+    const COUNT = 12;
+    const cs = this.cellSize;
+    for (let i = 0; i < COUNT; i++) {
+      const angle = (Math.PI * 2 * i) / COUNT + (Math.random() - 0.5) * 0.3;
+      const distance = cs * (0.9 + Math.random() * 0.5); // 0.9-1.4 × cellSize
+      const sizePx = 7 + Math.random() * 4;
+      const spark = this.scene.add
+        .image(center.x, center.y, 'merge.spark')
+        .setOrigin(0.5)
+        .setDepth(40)
+        .setBlendMode(Phaser.BlendModes.ADD);
+      spark.setDisplaySize(sizePx, sizePx);
+      this.scene.tweens.add({
+        targets: spark,
+        x: center.x + Math.cos(angle) * distance,
+        y: center.y + Math.sin(angle) * distance,
+        scaleX: spark.scaleX * 0.2,
+        scaleY: spark.scaleY * 0.2,
+        alpha: 0,
+        duration: 380 + Math.random() * 140,
+        ease: 'Quad.Out',
+        onComplete: () => spark.destroy(),
+      });
+    }
   }
 
   /**

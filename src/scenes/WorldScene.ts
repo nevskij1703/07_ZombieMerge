@@ -25,7 +25,7 @@
 
 import Phaser from 'phaser';
 import { SceneKey } from './sceneKeys';
-import { DESIGN_WIDTH, DESIGN_HEIGHT, TIER_COLORS, WEAPON_FRAME_PX } from '../config/constants';
+import { DESIGN_WIDTH, DESIGN_HEIGHT, TIER_COLORS, WEAPON_FRAME_PX, LOOTBOX_ICON_SCALE } from '../config/constants';
 import type { Level, BattleResult, LootboxKind, WeaponTier, Obstacle } from '../types';
 import { getState, save, update } from '../core/storage';
 import { applyBattleResult, laneArsenals, bestWeaponTier, levelPassBonus } from '../core/progression';
@@ -714,8 +714,9 @@ export class WorldScene extends Phaser.Scene {
     if (chestDef.reward === 'lootbox' && chestDef.lootboxKind) {
       const texKey = `ui.lootbox_${chestDef.lootboxKind}`;
       if (this.textures.exists(texKey)) {
+        const target = size * LOOTBOX_ICON_SCALE;
         const img = this.add.image(0, 0, texKey).setOrigin(0.5);
-        img.setDisplaySize(size, size);
+        img.setDisplaySize(target, target);
         container.add(img);
         container.setScale(0);
         this.tweens.add({ targets: container, scale: 1, duration: 240, ease: 'Back.Out' });

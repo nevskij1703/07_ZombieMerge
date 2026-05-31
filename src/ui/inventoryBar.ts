@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { getState } from '../core/storage';
 import { isLootboxCode, lootboxKindOfCode } from '../core/lootbox';
-import { WEAPON_FRAME_PX } from '../config/constants';
+import { WEAPON_FRAME_PX, LOOTBOX_ICON_SCALE } from '../config/constants';
 
 /**
  * Инвентарь = бесконечный стек. Одна квадратная ячейка размером ~70% ячейки мердж-поля,
@@ -88,7 +88,7 @@ export class InventoryBar {
       const texKey = lbKind ? `ui.lootbox_${lbKind}` : '';
       if (lbKind && this.scene.textures.exists(texKey)) {
         this.slotLabel.setText('');
-        const target = this.size * 0.85;
+        const target = this.size * 0.85 * LOOTBOX_ICON_SCALE;
         const icon = this.scene.add
           .image(0, 0, texKey)
           .setOrigin(0.5)

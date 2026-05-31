@@ -26,6 +26,14 @@ export const COLORS = {
  */
 export const WEAPON_FRAME_PX = 272;
 
+/**
+ * Доп. масштабный коэффициент для иконок ЛУТБОКСОВ (cheap/medium/elite) — применяется
+ * поверх их «target size» в каждом из 3 мест отрисовки: merge-плитка, inventory, chest
+ * reward. Делает PNG-арт лутбокса компактнее на (1 - LOOTBOX_ICON_SCALE) × 100%
+ * относительно его контейнера. 0.7 ≈ -30% от исходного «full-fit» размера.
+ */
+export const LOOTBOX_ICON_SCALE = 0.7;
+
 // Цвет плитки оружия по тиру (1-based; index 0 — заглушка). Палитра — из Figma макета
 // weapon_frame (164:341): цвет берётся с плашки tier-индекса каждого тира. Используется:
 //   • как fallback в `MergeBoard.makeTile` если PNG-рамка не загрузилась;

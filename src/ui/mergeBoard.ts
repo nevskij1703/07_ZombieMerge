@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import type { FieldState, LootboxKind, WeaponTier } from '../types';
-import { UI, WEAPON_FRAME_PX } from '../config/constants';
+import { UI, WEAPON_FRAME_PX, LOOTBOX_ICON_SCALE } from '../config/constants';
 import { weaponName } from '../core/weapons';
 import { canMergeIndices, mergeInto, moveOrSwap } from '../core/merge';
 import { isLootboxCode, isWeaponCellValue, lootboxKindOfCode } from '../core/lootbox';
@@ -800,9 +800,10 @@ export class MergeBoard {
     const children: Phaser.GameObjects.GameObject[] = [];
 
     if (this.scene.textures.exists(texKey)) {
-      // Иконка с aspect ratio 1:1 (PNG-ассеты квадратные).
+      // Иконка с aspect ratio 1:1 (PNG-ассеты квадратные). Доп. усадка LOOTBOX_ICON_SCALE.
+      const target = size * LOOTBOX_ICON_SCALE;
       const img = this.scene.add.image(0, 0, texKey).setOrigin(0.5);
-      img.setDisplaySize(size, size);
+      img.setDisplaySize(target, target);
       children.push(img);
     } else {
       // Fallback: цветной квадратик + emoji + подпись.

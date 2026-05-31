@@ -1,7 +1,6 @@
-// «Мировая» сцена: одна на всё (база + бой). Боевая логика — REALTIME per-lane tick.
-// Никаких event-timelin'ов: каждый кадр движем бойца и зомби, проверяем коллизии,
-// применяем удары. Симулятор больше НЕ вычисляет результат заранее — мы собираем
-// рузультат из runtime в конце боя (assembleResult).
+// «Мировая» сцена: одна на всё (база + бой). Боевая логика — REALTIME per-lane tick
+// в `BattleTickEngine` (`world/battleTick.ts`); WorldScene — только ОРКЕСТРАТОР
+// (lifecycle + base UI + переходы base↔battle + модалка результата).
 //
 // Геометрия (мировые Y):
 //   • Y=0..1280 — «base view» (scrollY=0): ворота на GATE_Y=440, мердж-поле, HUD.
@@ -13,25 +12,27 @@
 //   • 'base'           — интерактив базы (мердж/произвести/трэш/инвентарь/в бой).
 //   • 'transition'     — ворота открываются, бойцы спускаются к мердж-полю, забирают
 //                        оружие, бегут к старту своей линии.
-//   • 'battle'         — реалтайм симуляция: бойцы наступают, бьют зомби, отскакивают.
+//   • 'battle'         — реалтайм симуляция: BattleTickEngine.tick каждый кадр.
 //   • 'showing_result' — модалка результата.
 //
-// Per-lane state machine (LaneRuntime.state):
-//   walking    — бой идёт вперёд к ближайшему живому препятствию (или к сундуку).
-//   backstep   — после ранения зомби: бой отскакивает на BACKSTEP_DISTANCE, зомби stun.
-//   retreating — арсенал пуст: бой бежит на базу (за нижний край).
-//   at_chest   — бой дошёл до сундука; idle-bounce, лайн «завершена».
-//   finished   — бой ушёл за низ экрана; лайн «завершена».
+// Структура файла:
+//   • Lifecycle (create / update / updateCameraFollow)
+//   • Battle orchestration (goBattle / playOpeningSequence / spawnAndDispatchFighters
+//     / startBattle / buildSpeedHud / setSpeed / skipBattle)
+//   • Result modal (showResult / returnToBase)
+//   • Base UI (buildBaseUI / drawMergeGround / buildTrashItem)
+//   • Base actions (produce / pullItem / openLootbox / trashWeapon / refreshButtons)
+//   • Misc (syncTrashRect / toast)
 
 import Phaser from 'phaser';
 import { SceneKey } from './sceneKeys';
-import { DESIGN_WIDTH, DESIGN_HEIGHT, TIER_COLORS, WEAPON_FRAME_PX, LOOTBOX_ICON_SCALE, NEW_BADGE_MIN_TIER } from '../config/constants';
-import type { Level, BattleResult, LootboxKind, WeaponTier, Obstacle } from '../types';
+import { DESIGN_WIDTH, DESIGN_HEIGHT, NEW_BADGE_MIN_TIER } from '../config/constants';
+import type { LootboxKind } from '../types';
 import { getState, save, update } from '../core/storage';
 import { applyBattleResult, laneArsenals, bestWeaponTier, levelPassBonus } from '../core/progression';
 import { generateLevel } from '../core/levelGen';
 import { produceCost, canAfford } from '../core/economy';
-import { weaponName, getWeapon } from '../core/weapons';
+import { weaponName } from '../core/weapons';
 import { placeFirstFree, isFull, pullFromInventory } from '../core/merge';
 import { isWeaponCellValue, rollLootboxTier } from '../core/lootbox';
 import { getBalance } from '../core/balanceRuntime';
@@ -41,100 +42,17 @@ import { MergeBoard, type BoardRect } from '../ui/mergeBoard';
 import { InventoryBar } from '../ui/inventoryBar';
 import { Button } from '../ui/button';
 import { MainScreenUI } from '../ui/mainScreen';
-import { parseLocation, buildLocation, findTileset, type BuiltLocation, type LocationManifest } from '../art/locationLoader';
-import { loadOverrides, applyOverride } from '../editor/layoutOverrides';
 import { LayoutEditor } from '../editor/layoutEditor';
+import type { SceneMode } from './world/types';
+import {
+  GATE_Y, FIGHTER_PICKUP_Y, CHEST_GAP, CAMERA_TOP_BUFFER, FIGHTER_VIEW_OFFSET,
+  WORLD_TOP_BOUND, WORLD_BOTTOM_BOUND, obstacleY,
+} from './world/constants';
+import { BaseArtController } from './world/baseArt';
+import { FightersController } from './world/fighters';
+import { BattleTickEngine } from './world/battleTick';
 
-// ============================ Layout constants =================================
-
-const GATE_Y = 440;          // ворота — общая граница базы и города
-// Дистанция от ворот до ПЕРВОГО зомби — первый зомби за пределами видимой зоны базы.
-const FIRST_ZOMBIE_OFFSET = 500;
-const ZOMBIE_SPACING = 64;   // КОНСТАНТНЫЙ шаг между препятствиями
-const CHEST_GAP = 64;        // зазор между самым дальним препятствием и сундуком
-// Idle позиция бойца на базе: между воротами (440) и мердж-полем (555).
-const FIGHTER_IDLE_Y = 500;
-// Y «у мердж-поля» — пickup в начале боя.
-const FIGHTER_PICKUP_Y = 580;
-
-// ============================ Battle tuning =====================================
-
-const FIGHTER_WALK_SPEED = 0.3;        // px/ms forward
-const FIGHTER_BACKSTEP_SPEED = 0.275;  // чуть медленнее walk (отскок после ранения)
-const FIGHTER_RETREAT_SPEED = 0.30;    // как walk; бежит на базу когда оружие кончилось
-const ATTACK_RANGE = 14;               // дистанция attack contact (px между center'ами)
-const BACKSTEP_DISTANCE = 36;          // насколько отлетает после ранения
-const ZOMBIE_SPEED_RATIO = 0.25;       // от скорости бойца (зомби автоматически замедляются вместе с бойцами)
-const ZOMBIE_STUN_MS = 200;            // не двигается после удара (= ~backstep duration)
-const ZOMBIE_STOP_MARGIN = 6;          // зазор перед бойцом/др зомби
-const CHEST_APPROACH_DIST = 50;        // когда бой подошёл к сундук area
-const RESULT_DELAY_MS = 1000;          // пауза после последней решённой лайн до модалки
-
-// Камера
-const WORLD_TOP_BOUND = -3500;
-const WORLD_BOTTOM_BOUND = DESIGN_HEIGHT + 600;
-const FIGHTER_VIEW_OFFSET = DESIGN_HEIGHT / 3;
-const CAMERA_TOP_BUFFER = FIGHTER_VIEW_OFFSET - 46 + 60;
-const OFF_SCREEN_BELOW_Y = DESIGN_HEIGHT + 200;
-
-// ============================ Color palette =====================================
-
-const ZOMBIE_TIER_COLORS: number[] = [
-  0x333333, 0x6b8e23, 0x7d931e, 0x90981e, 0xa68f1e, 0xb6851e,
-  0xc77b1e, 0xbe6a1e, 0xb55a1e, 0xab4a1e, 0xa53a22, 0xa02e22, 0x9b2222,
-];
-function zombieColor(tier: number): number {
-  return ZOMBIE_TIER_COLORS[Math.max(1, Math.min(12, tier))] ?? ZOMBIE_TIER_COLORS[1];
-}
-
-// ============================ Runtime types =====================================
-
-type SceneMode = 'base' | 'transition' | 'battle' | 'showing_result';
-
-type LaneState = 'walking' | 'backstep' | 'retreating' | 'at_chest' | 'finished';
-
-interface ArsenalWeapon {
-  tier: number;
-  hits: number;
-  maxHits: number;
-}
-
-interface ObRuntime {
-  kind: 'zombie' | 'crate' | 'scrap';
-  token: Phaser.GameObjects.GameObject;
-  bar: Phaser.GameObjects.Rectangle | null;
-  barBg: Phaser.GameObjects.Rectangle | null;
-  hpText: Phaser.GameObjects.Text | null;
-  hp: number;
-  maxHp: number;
-  scrap: number;
-  givesWeapon: boolean;
-  zombieTier: number;
-  stunnedUntil: number;
-  dead: boolean;
-}
-
-interface LaneRuntime {
-  li: number;
-  state: LaneState;
-  fighter: Phaser.GameObjects.Container;
-  /** Текущее активное оружие (`null` = арсенал пуст). */
-  active: ArsenalWeapon | null;
-  /** Остальные оружия (отсортированы DESC по тиру — strongest first). */
-  arsenal: ArsenalWeapon[];
-  obs: ObRuntime[];
-  chest: Phaser.GameObjects.Container;
-  chestY: number;
-  chestOpened: boolean;
-  reachedChest: boolean;
-  scrapCollected: number;
-  weaponsCollected: number[];
-  lootboxesCollected: LootboxKind[];
-  /** Y до которого боец должен отскочить во время backstep. */
-  backstepTargetY: number;
-}
-
-// ================================ Scene =========================================
+// ============================ Scene =============================================
 
 export class WorldScene extends Phaser.Scene {
   // === Base UI references ===
@@ -148,44 +66,20 @@ export class WorldScene extends Phaser.Scene {
   private trashPlaceArt: Phaser.GameObjects.Image | null = null;
   private invPlaceArt: Phaser.GameObjects.Image | null = null;
   private mergeGroundGfx: Phaser.GameObjects.Graphics | null = null;
-  private gradientTop: Phaser.GameObjects.Image | null = null;
-  private gradientBot: Phaser.GameObjects.Image | null = null;
-  private baseLocation: BuiltLocation | null = null;
-  private baseManifest: LocationManifest | null = null;
-  private baseRoadTopY = 0;
-  private baseRoadContainer: Phaser.GameObjects.Container | null = null;
-  /** Активные tweens мигания ламп (yoyo alpha 50%↔100% когда ворота открыты). */
-  private lampTweens: Phaser.Tweens.Tween[] = [];
   layoutEditor: LayoutEditor | null = null;
   private lootRng: () => number = () => Math.random();
 
-  // === Fighters (persistent — created once in `create()`, anim'd between idle/battle) ===
-  private fighters: Phaser.GameObjects.Container[] = [];
-  private fighterTierTexts: Phaser.GameObjects.Text[] = [];
-  private fighterWeaponIcons: Phaser.GameObjects.Image[] = [];
-  private fighterHitsTexts: Phaser.GameObjects.Text[] = [];
-  private fighterRings: Phaser.GameObjects.Arc[] = [];
+  // === Extracted controllers (see src/scenes/world/) ===
+  private baseArt!: BaseArtController;
+  private fightersCtl!: FightersController;
+  private battle!: BattleTickEngine;
 
-  // === Battle state ===
+  // === Scene-level battle state (not in BattleTickEngine because UI/HUD) ===
   private mode: SceneMode = 'base';
-  private level: Level | null = null;
-  private laneRuntimes: LaneRuntime[] = [];
-  private battleNodes: Phaser.GameObjects.GameObject[] = []; // teardown list
-  private resultShown = false;
-  /** Время (`this.time.now`), когда все лайны завершились — после этого `RESULT_DELAY_MS`
-   *  до модалки. 0 = ещё не все завершились. */
-  private allLanesFinishedAt = 0;
   private resultNodes: Phaser.GameObjects.GameObject[] = [];
   private speedButtons: Array<{ btn: Button; factor: number }> = [];
   private skipBtn: Button | null = null;
   private speedFactor = 1;
-
-  // === World layout (per battle) ===
-  private chestRowY = 0;
-  private worldTopY = -200;
-  private laneWidth = 0;
-  private maxObsCount = 0;
-  private obstacleTokenSize = 0;
 
   constructor() {
     super(SceneKey.World);
@@ -197,30 +91,42 @@ export class WorldScene extends Phaser.Scene {
     this.mode = 'base';
     this.lootRng = makeRng(Date.now() & 0x7fffffff);
 
-    this.buildBaseArt();
-    this.buildBaseRoad();
-    this.buildGradients();
+    // 1) Base art (gradients + tiles + road + lamps).
+    this.baseArt = new BaseArtController(this);
+    this.baseArt.build();
 
+    // 2) Layout editor (DEV only).
     if (import.meta.env.DEV) {
       this.layoutEditor = new LayoutEditor(this);
-      if (this.baseLocation) {
-        for (const [id, img] of this.baseLocation.byId) {
-          this.layoutEditor.register(id, img, id.replace(/^base\./, ''));
-        }
+      for (const [id, img] of this.baseArt.entries()) {
+        this.layoutEditor.register(id, img, id.replace(/^base\./, ''));
       }
-      if (this.baseRoadContainer) {
+      if (this.baseArt.baseRoadContainer) {
         this.layoutEditor.register(
           'base.road',
-          this.baseRoadContainer as unknown as Phaser.GameObjects.Container,
+          this.baseArt.baseRoadContainer as unknown as Phaser.GameObjects.Container,
           'Base / Дорога',
         );
       }
     }
 
+    // 3) HUD + base UI.
     this.hud = new Hud(this);
     this.buildBaseUI();
-    this.ensureFightersExist();
 
+    // 4) Fighters controller (persistent across battles).
+    this.fightersCtl = new FightersController(this);
+    this.fightersCtl.ensureExists();
+
+    // 5) Battle tick engine (per-battle reset via resetForBattle).
+    this.battle = new BattleTickEngine({
+      scene: this,
+      fighters: this.fightersCtl,
+      hud: this.hud,
+      onResultReady: () => this.showResult(),
+    });
+
+    // 6) DEV layout editor: register UI elements (after HUD + mainUI built).
     if (import.meta.env.DEV && this.layoutEditor) {
       this.layoutEditor.register('ui.hud', this.hud.container as unknown as Phaser.GameObjects.Container, 'UI / HUD');
       this.layoutEditor.register('ui.inventory', this.inv.container, 'UI / Inventory');
@@ -254,14 +160,12 @@ export class WorldScene extends Phaser.Scene {
         // Применяем speedFactor → slow-mo (×0.5) / norm (×1) / fast (×4). `tweens.
         // timeScale` + `time.timeScale` параллельно ускоряют tween-анимации (chest
         // open, wound flash) — синхронно с per-tick движением.
-        // В режиме showing_result speedFactor мы сбрасываем в 1 (в showResult), поэтому
-        // sub-stepping тут нерелевантен — но цикл всё равно работает корректно.
         const scaledDelta = safeDelta * this.speedFactor;
         const SUB_STEP_MS = 16;
         const steps = Math.max(1, Math.ceil(scaledDelta / SUB_STEP_MS));
         const subDt = scaledDelta / steps;
         for (let i = 0; i < steps; i++) {
-          this.tickBattle(subDt);
+          this.battle.tick(subDt, this.time.now);
         }
       } catch (e) {
         console.error('[battle] tick failed', e);
@@ -271,498 +175,22 @@ export class WorldScene extends Phaser.Scene {
 
   /** Камера тянется к самой высокой точке лидера и НЕ возвращается вниз во время боя. */
   private updateCameraFollow(): void {
-    if (this.fighters.length === 0) return;
+    const fighters = this.fightersCtl.fighters;
+    if (fighters.length === 0) return;
     let leadY = Infinity;
-    for (const f of this.fighters) {
+    for (const f of fighters) {
       if (!f) continue;
       if (f.y < leadY) leadY = f.y;
     }
     if (!isFinite(leadY)) return;
-    const target = Math.max(this.worldTopY, leadY - FIGHTER_VIEW_OFFSET);
+    const target = Math.max(this.battle.worldTopY, leadY - FIGHTER_VIEW_OFFSET);
     const cam = this.cameras.main;
     if (target < cam.scrollY) {
       cam.scrollY = Phaser.Math.Linear(cam.scrollY, target, 0.12);
     }
   }
 
-  // ============================== Battle tick ==================================
-
-  /** Главная функция боя — вызывается каждый кадр пока mode='battle'. */
-  private tickBattle(dt: number): void {
-    if (!this.level) return;
-    const now = this.time.now;
-
-    // 1) Движение зомби (per lane).
-    for (const lane of this.laneRuntimes) {
-      this.moveLaneZombies(lane, dt, now);
-    }
-
-    // 2) Движение/действия бойца (per lane).
-    for (const lane of this.laneRuntimes) {
-      this.tickLane(lane, dt, now);
-    }
-
-    // 3) Проверка завершения уровня — все лайны в {at_chest, retreating, finished}.
-    //    КЛЮЧЕВОЕ: 'retreating' тоже считается «done» — как только последний боец НАЧАЛ
-    //    убегать на базу, запускаем таймер RESULT_DELAY_MS. Без этого ждали бы пока он
-    //    физически добежит за нижний край экрана (~4-5 секунд), что слишком долго.
-    const allDone = this.laneRuntimes.every(l =>
-      l.state === 'at_chest' || l.state === 'retreating' || l.state === 'finished',
-    );
-    if (allDone && !this.resultShown) {
-      if (this.allLanesFinishedAt === 0) {
-        this.allLanesFinishedAt = now;
-      } else if (now >= this.allLanesFinishedAt + RESULT_DELAY_MS) {
-        this.showResult();
-      }
-    }
-  }
-
-  /** Движение зомби в линии: к бойцу (вниз), с учётом видимости/stun/collision/crate.
-   *
-   *  Правило коробок: zombie «видит бойца» только если между ним и бойцом нет НИ ОДНОЙ
-   *  живой коробки. Идём по линии от бойца к концу (idx=0 → N-1), флагом `crateAhead`
-   *  помечаем, что между текущим zombie и бойцом стоит хотя бы одна коробка. Такой
-   *  zombie стоит на месте (но всё равно блокирует zombies за собой).
-   *
-   *  Когда боец разбивает коробку → `ob.dead = true` → коробка пропускается в этом
-   *  loop'е и `crateAhead` для zombies за ней сбрасывается → они начинают идти.
-   *
-   *  Несколько коробок на линии: zombies между ними стоят пока хоть одна коробка
-   *  ВПЕРЕДИ них жива (то есть ближе к бойцу). Когда боец «прорубается» через
-   *  ближайшую коробку — zombies сразу за ней оживают, а zombies между ними и
-   *  следующей коробкой — продолжают стоять. */
-  private moveLaneZombies(lane: LaneRuntime, dt: number, now: number): void {
-    const cam = this.cameras.main;
-    const viewTopY = cam.scrollY;
-    const viewBotY = cam.scrollY + DESIGN_HEIGHT;
-    const tokenSize = this.obstacleTokenSize || 44;
-    const speed = FIGHTER_WALK_SPEED * ZOMBIE_SPEED_RATIO;
-    const dy = Math.min(speed * dt, 8);
-    // Линия первого зомби (obstacleY(0)) — это ГРАНИЦА: дальше зомби идти не могут,
-    // даже если боец уже убежал на базу. Раньше границей был сам гейт (zombies могли
-    // приближаться вплотную к воротам) — теперь они останавливаются на той же линии,
-    // где обычно спавнятся первые зомби.
-    const frontLineY = this.obstacleY(0);
-    const fighter = lane.fighter;
-    if (!fighter) return;
-
-    let upperLimitY = Math.min(fighter.y - tokenSize - ZOMBIE_STOP_MARGIN, frontLineY);
-    let crateAhead = false; // живая коробка между бойцом и текущей точкой обхода
-
-    for (let idx = 0; idx < lane.obs.length; idx++) {
-      const ob = lane.obs[idx];
-      if (!ob || ob.dead) continue;
-      if (ob.kind === 'scrap') continue; // не двигается, не блокирует
-      const tobj = ob.token as Phaser.GameObjects.GameObject & { y: number };
-      const currentY = tobj.y;
-      // Коробка не двигается, блокирует, и «закрывает обзор» для всех zombies за ней.
-      if (ob.kind === 'crate') {
-        upperLimitY = currentY - tokenSize - ZOMBIE_STOP_MARGIN;
-        crateAhead = true;
-        continue;
-      }
-      // Zombie за живой коробкой — стоит на месте (бойца не видит), но блокирует.
-      if (crateAhead) {
-        upperLimitY = currentY - tokenSize - ZOMBIE_STOP_MARGIN;
-        continue;
-      }
-      // Не в видимой зоне — стоит, блокирует.
-      if (currentY < viewTopY || currentY > viewBotY) {
-        upperLimitY = currentY - tokenSize - ZOMBIE_STOP_MARGIN;
-        continue;
-      }
-      // Stunned после удара.
-      if (now < ob.stunnedUntil) {
-        upperLimitY = currentY - tokenSize - ZOMBIE_STOP_MARGIN;
-        continue;
-      }
-      // Двигаемся вниз, но не дальше upperLimitY.
-      const desiredY = Math.min(currentY + dy, upperLimitY);
-      if (desiredY > currentY) {
-        this.moveObstacleVisuals(ob, desiredY - currentY);
-        upperLimitY = desiredY - tokenSize - ZOMBIE_STOP_MARGIN;
-      } else {
-        upperLimitY = currentY - tokenSize - ZOMBIE_STOP_MARGIN;
-      }
-    }
-  }
-
-  /** Сдвинуть все визуальные части препятствия (token + bar + bg + text) на dy. */
-  private moveObstacleVisuals(ob: ObRuntime, dy: number): void {
-    if (dy === 0) return;
-    (ob.token as Phaser.GameObjects.GameObject & { y: number }).y += dy;
-    if (ob.bar) ob.bar.y += dy;
-    if (ob.barBg) ob.barBg.y += dy;
-    if (ob.hpText) ob.hpText.y += dy;
-  }
-
-  /** Tick state machine бойца в одной лайн. */
-  private tickLane(lane: LaneRuntime, dt: number, now: number): void {
-    switch (lane.state) {
-      case 'walking': this.tickFighterWalking(lane, dt, now); break;
-      case 'backstep': this.tickFighterBackstep(lane, dt); break;
-      case 'retreating': this.tickFighterRetreating(lane, dt); break;
-      case 'at_chest':
-      case 'finished':
-        return;
-    }
-  }
-
-  private tickFighterWalking(lane: LaneRuntime, dt: number, now: number): void {
-    // Пытаемся убедиться что есть активное оружие. Если активное исчерпано —
-    // переключаемся. Если арсенал пуст, остаёмся БЕЗ оружия (`hasWeapon=false`).
-    const hasWeapon = (lane.active != null && lane.active.hits > 0)
-      || this.switchWeapon(lane);
-
-    const targetIdx = this.findNextLiveObstacle(lane);
-
-    // === БЕЗ оружия ============================================================
-    // Лом — собираем (instant credit). Сундук — открываем. Zombie/crate — идём к нему
-    // до столкновения, потом retreat (бить нечем).
-    if (!hasWeapon) {
-      if (targetIdx === null) {
-        this.walkOrOpenChest(lane, dt);
-        return;
-      }
-      const ob = lane.obs[targetIdx];
-      const obY = (ob.token as Phaser.GameObjects.GameObject & { y: number }).y;
-      const dist = lane.fighter.y - obY;
-      if (ob.kind === 'scrap') {
-        this.tryPickupScrap(lane, ob, obY, dist, dt);
-        return;
-      }
-      // zombie/crate ahead — collision → retreat.
-      if (dist <= ATTACK_RANGE) {
-        lane.state = 'retreating';
-        return;
-      }
-      lane.fighter.y -= FIGHTER_WALK_SPEED * dt;
-      return;
-    }
-
-    // === С оружием =============================================================
-    if (targetIdx === null) {
-      this.walkOrOpenChest(lane, dt);
-      return;
-    }
-    const ob = lane.obs[targetIdx];
-    const obY = (ob.token as Phaser.GameObjects.GameObject & { y: number }).y;
-    const dist = lane.fighter.y - obY;
-
-    if (ob.kind === 'scrap') {
-      this.tryPickupScrap(lane, ob, obY, dist, dt);
-      return;
-    }
-    // zombie/crate — подойти и ударить.
-    if (dist > ATTACK_RANGE) {
-      lane.fighter.y -= FIGHTER_WALK_SPEED * dt;
-      return;
-    }
-    this.attackObstacle(lane, targetIdx, now);
-  }
-
-  /** Подобрать лом при контакте: instant credit в state.scrap, не в попап. */
-  private tryPickupScrap(
-    lane: LaneRuntime, ob: ObRuntime, obY: number, dist: number, dt: number,
-  ): void {
-    if (dist <= ATTACK_RANGE + 4) {
-      const amount = ob.scrap;
-      update((st) => { st.scrap += amount; });
-      save();
-      this.hud.refresh();
-      this.popText(lane.fighter.x, obY, `+${amount}`, '#9fe870');
-      ob.token.destroy();
-      ob.dead = true;
-    } else {
-      lane.fighter.y -= FIGHTER_WALK_SPEED * dt;
-    }
-  }
-
-  /** Идти к сундуку и открыть при достижении (когда впереди живых препятствий нет). */
-  private walkOrOpenChest(lane: LaneRuntime, dt: number): void {
-    const dist = lane.fighter.y - lane.chestY;
-    if (dist <= CHEST_APPROACH_DIST) {
-      this.openChestForLane(lane);
-      return;
-    }
-    lane.fighter.y -= FIGHTER_WALK_SPEED * dt;
-  }
-
-  /** Один удар активным оружием: -1 hit, -dmg HP. Если убил — продолжаем, если ранил —
-   *  backstep + stun зомби. */
-  private attackObstacle(lane: LaneRuntime, idx: number, now: number): void {
-    const ob = lane.obs[idx];
-    const w = lane.active;
-    if (!w || w.hits <= 0) return;
-    const dmg = getWeapon(w.tier).damagePerHit;
-    ob.hp -= dmg;
-    w.hits -= 1;
-    this.updateFighterWeaponVisual(lane);
-
-    if (ob.hp <= 0) {
-      // Killed — забрать лут, продолжить движение.
-      // Coробка даёт ТОЛЬКО refill ресурса самого крутого оружия (если givesWeapon=true).
-      // НЕ выдаёт scrap — он приходит только из лома на земле и из сундуков.
-      if (ob.kind === 'crate' && ob.givesWeapon) {
-        this.refillBestWeapon(lane);
-      }
-      this.killObstacle(ob);
-      // На следующем tick'е перейдём к следующему target.
-    } else {
-      // Survived — бойцу backstep, зомби stun.
-      ob.stunnedUntil = now + ZOMBIE_STUN_MS;
-      this.updateObstacleVisual(ob);
-      this.tweens.add({ targets: ob.token, alpha: 0.55, yoyo: true, duration: 90 });
-      lane.backstepTargetY = lane.fighter.y + BACKSTEP_DISTANCE;
-      lane.state = 'backstep';
-    }
-  }
-
-  private tickFighterBackstep(lane: LaneRuntime, dt: number): void {
-    const target = lane.backstepTargetY;
-    if (lane.fighter.y >= target) {
-      // Backstep завершён — если оружие исчерпано, retreat. Иначе walking.
-      if (!lane.active || lane.active.hits <= 0) {
-        if (!this.switchWeapon(lane)) {
-          lane.state = 'retreating';
-          return;
-        }
-      }
-      lane.state = 'walking';
-      return;
-    }
-    lane.fighter.y = Math.min(target, lane.fighter.y + FIGHTER_BACKSTEP_SPEED * dt);
-  }
-
-  private tickFighterRetreating(lane: LaneRuntime, dt: number): void {
-    const target = OFF_SCREEN_BELOW_Y;
-    if (lane.fighter.y >= target) {
-      lane.state = 'finished';
-      return;
-    }
-    lane.fighter.y = Math.min(target, lane.fighter.y + FIGHTER_RETREAT_SPEED * dt);
-  }
-
-  /** Активировать следующее оружие из арсенала (strongest first). Возвращает false если
-   *  ничего не осталось. */
-  private switchWeapon(lane: LaneRuntime): boolean {
-    while (lane.arsenal.length > 0) {
-      const next = lane.arsenal.shift()!;
-      if (next.hits > 0) {
-        lane.active = next;
-        this.updateFighterWeaponVisual(lane);
-        return true;
-      }
-    }
-    lane.active = null;
-    this.updateFighterWeaponVisual(lane);
-    return false;
-  }
-
-  /** Сундук-коробка с givesWeapon=true: обновляем ресурс САМОГО КРУТОГО оружия в арсенале
-   *  бойца до его maxHits. */
-  private refillBestWeapon(lane: LaneRuntime): void {
-    const all: ArsenalWeapon[] = [];
-    if (lane.active) all.push(lane.active);
-    all.push(...lane.arsenal);
-    if (all.length === 0) return;
-    let best: ArsenalWeapon | null = null;
-    for (const w of all) {
-      if (!best || w.tier > best.tier) best = w;
-    }
-    if (best) {
-      best.hits = best.maxHits;
-      this.updateFighterWeaponVisual(lane);
-    }
-  }
-
-  private findNextLiveObstacle(lane: LaneRuntime): number | null {
-    for (let i = 0; i < lane.obs.length; i++) {
-      const ob = lane.obs[i];
-      if (ob && !ob.dead) return i;
-    }
-    return null;
-  }
-
-  private killObstacle(ob: ObRuntime): void {
-    ob.dead = true;
-    this.tweens.add({
-      targets: ob.token, alpha: 0, scale: 0.2, duration: 160, delay: 60,
-      onComplete: () => {
-        ob.token.destroy();
-        ob.bar?.destroy();
-        ob.barBg?.destroy();
-        ob.hpText?.destroy();
-      },
-    });
-  }
-
-  private updateObstacleVisual(ob: ObRuntime): void {
-    if (ob.bar) ob.bar.setScale(Math.max(0, ob.hp / ob.maxHp), 1);
-    if (ob.hpText) ob.hpText.setText(String(Math.max(0, ob.hp)));
-  }
-
-  private updateFighterWeaponVisual(lane: LaneRuntime): void {
-    const li = lane.li;
-    const w = lane.active;
-    const tierText = this.fighterTierTexts[li];
-    const hitsText = this.fighterHitsTexts[li];
-    const ring = this.fighterRings[li];
-    const iconImg = this.fighterWeaponIcons[li];
-    if (w && w.hits > 0) {
-      tierText?.setText(`T${w.tier}`);
-      hitsText?.setText(String(w.hits));
-      ring?.setStrokeStyle(3, TIER_COLORS[w.tier] ?? 0x66ccff, 1);
-      // Иконка оружия над бойцом — приоритет визуала. Масштаб по эталонному
-      // WEAPON_FRAME_PX (фрейм Figma 136 = 272 PNG @ pngScale 2), а не по max(iw,ih).
-      // Иначе длинная винтовка визуально стала бы такой же, как короткий нож, —
-      // пропадала бы дизайнерская разница между классами оружий.
-      const key = `weapon.t${w.tier}`;
-      if (iconImg) {
-        if (this.textures.exists(key)) {
-          iconImg.setTexture(key);
-          const tex = this.textures.get(key).getSourceImage();
-          const iw = (tex as { width: number }).width ?? 1;
-          const ih = (tex as { height: number }).height ?? 1;
-          const target = (this.obstacleTokenSize || 44) * 0.85;
-          const s = target / WEAPON_FRAME_PX;
-          iconImg.setDisplaySize(iw * s, ih * s).setVisible(true);
-        } else {
-          iconImg.setVisible(false);
-        }
-      }
-    } else {
-      tierText?.setText('—');
-      hitsText?.setText('');
-      ring?.setStrokeStyle(3, 0x55606e, 1);
-      iconImg?.setVisible(false);
-    }
-  }
-
-  private openChestForLane(lane: LaneRuntime): void {
-    if (lane.chestOpened) return;
-    lane.chestOpened = true;
-    lane.reachedChest = true;
-    // Snap бойца у сундука.
-    lane.fighter.y = lane.chestY + 46;
-    this.openChestVisual(lane);
-    this.renderChestContent(lane);
-    // Собрать награду из сундука.
-    const cd = this.level!.lanes[lane.li].chest;
-    if (cd.reward === 'scrap') lane.scrapCollected += cd.scrap ?? 0;
-    else if (cd.reward === 'weapon' && cd.weaponTier != null) lane.weaponsCollected.push(cd.weaponTier);
-    else if (cd.reward === 'lootbox' && cd.lootboxKind) lane.lootboxesCollected.push(cd.lootboxKind);
-    lane.state = 'at_chest';
-    // Idle bounce.
-    this.tweens.add({ targets: lane.fighter, scaleY: 0.92, yoyo: true, duration: 420, repeat: -1 });
-  }
-
-  private openChestVisual(lane: LaneRuntime): void {
-    const chest = lane.chest;
-    const lid = chest.getData('lid') as Phaser.GameObjects.Rectangle | undefined;
-    const body = chest.getData('body') as Phaser.GameObjects.Rectangle | undefined;
-    body?.setFillStyle(0xf2c63a);
-    if (lid) {
-      this.tweens.add({ targets: lid, y: lid.y - 26, angle: -28, duration: 260, ease: 'Back.Out' });
-    }
-    this.tweens.add({ targets: chest, scale: 1.12, yoyo: true, duration: 160 });
-  }
-
-  private renderChestContent(lane: LaneRuntime): void {
-    const chestDef = this.level!.lanes[lane.li].chest;
-    const x = (lane.li + 0.5) * this.laneWidth;
-    const size = 54;
-    const y = lane.chestY - size / 2 - 18;
-    const container = this.add.container(x, y).setDepth(15);
-
-    // Weapon-награда: иконка оружия из weapon.t<N> + tier-digit в углу — в том же
-    // стиле, что плитки на merge-поле. Если PNG-иконка не загружена — fallback на
-    // старый цветной rectangle с цифрой (handled ниже в общем блоке).
-    if (chestDef.reward === 'weapon') {
-      const t = chestDef.weaponTier ?? 1;
-      const iconKey = `weapon.t${t}`;
-      if (this.textures.exists(iconKey)) {
-        const tex = this.textures.get(iconKey).getSourceImage();
-        const iw = (tex as { width: number }).width ?? 1;
-        const ih = (tex as { height: number }).height ?? 1;
-        const target = size * 0.85;
-        const scale = target / WEAPON_FRAME_PX;
-        const icon = this.add.image(0, 0, iconKey).setOrigin(0.5)
-          .setDisplaySize(iw * scale, ih * scale);
-        // Tier digit — Inter Black 900, чёрный полупрозрачный (rgba 0,0,0,0.65 —
-        // тот же стиль, что в merge-плитке: читаемо на любой подложке). Без обводки,
-        // в правом нижнем углу. Размер пропорционален size (54 здесь = ~13px против
-        // 32px@136 в merge).
-        const tierFont = Math.max(10, Math.round(size * 32 / 136));
-        const tierBadge = this.add.text(size * 0.35, size * 0.35, String(t), {
-          fontFamily: 'Inter, Roboto, Arial Black, sans-serif',
-          fontStyle: '900',
-          fontSize: `${tierFont}px`,
-          color: 'rgba(0, 0, 0, 0.30)',
-        }).setOrigin(0.5);
-        container.add([icon, tierBadge]);
-        container.setScale(0);
-        this.tweens.add({ targets: container, scale: 1, duration: 240, ease: 'Back.Out' });
-        this.battleNodes.push(container);
-        return;
-      }
-    }
-
-    // Lootbox-награда: рисуем PNG-иконку ui.lootbox_<kind> поверх контейнера.
-    // Если ассет не найден — fallback на цветной квадрат с 📦.
-    if (chestDef.reward === 'lootbox' && chestDef.lootboxKind) {
-      const texKey = `ui.lootbox_${chestDef.lootboxKind}`;
-      if (this.textures.exists(texKey)) {
-        const target = size * LOOTBOX_ICON_SCALE;
-        const img = this.add.image(0, 0, texKey).setOrigin(0.5);
-        img.setDisplaySize(target, target);
-        container.add(img);
-        container.setScale(0);
-        this.tweens.add({ targets: container, scale: 1, duration: 240, ease: 'Back.Out' });
-        this.battleNodes.push(container);
-        return;
-      }
-    }
-
-    // Scrap / lootbox-fallback / weapon-fallback: цветной квадратик с подписью.
-    let fillColor = 0x888888;
-    let labelTxt = '';
-    let labelColor = '#ffffff';
-    let strokeColor = 0x000000;
-    let strokeAlpha = 0.4;
-    let labelFontFactor = 0.5;
-    if (chestDef.reward === 'scrap') {
-      fillColor = 0x6b7785;
-      labelTxt = `+${chestDef.scrap ?? 0}`;
-      labelColor = '#9fe870';
-      labelFontFactor = 0.4;
-    } else if (chestDef.reward === 'weapon') {
-      // PNG не загружено → старый visual (этот путь редкий, но оставлен).
-      const t = chestDef.weaponTier ?? 1;
-      fillColor = TIER_COLORS[t] ?? 0x888888;
-      labelTxt = String(t);
-    } else if (chestDef.reward === 'lootbox') {
-      const kind = chestDef.lootboxKind;
-      fillColor = kind === 'elite' ? 0x9b59b6 : kind === 'medium' ? 0xd4a017 : 0x8a6a3a;
-      labelTxt = '📦';
-      strokeColor = 0xffffff;
-      strokeAlpha = 0.7;
-      labelFontFactor = 0.6;
-    }
-    const bg = this.add.rectangle(0, 0, size, size, fillColor).setOrigin(0.5)
-      .setStrokeStyle(3, strokeColor, strokeAlpha);
-    const label = this.add.text(0, 0, labelTxt, {
-      fontFamily: 'monospace', fontSize: `${Math.round(size * labelFontFactor)}px`, color: labelColor,
-    }).setOrigin(0.5);
-    label.setStroke('#000000', 3);
-    container.add([bg, label]);
-    container.setScale(0);
-    this.tweens.add({ targets: container, scale: 1, duration: 240, ease: 'Back.Out' });
-    this.battleNodes.push(container);
-  }
-
-  // =========================== Battle building ==================================
+  // ============================== Battle orchestration =========================
 
   private goBattle(): void {
     const s = getState();
@@ -773,18 +201,14 @@ export class WorldScene extends Phaser.Scene {
     }
 
     this.mode = 'transition';
-    this.resultShown = false;
-    this.allLanesFinishedAt = 0;
     this.speedFactor = 1;
     this.tweens.timeScale = 1;
     this.time.timeScale = 1;
-    this.laneRuntimes = [];
-    this.battleNodes = [];
 
-    this.ensureFightersExist();
+    this.fightersCtl.ensureExists();
 
     // Пометить все weapon-тиры с поля (≥ NEW_BADGE_MIN_TIER) как «битые». После
-    // возврата на базу `MergeBoard.makeTile` пере-проверит battledTiers и снимет
+    // возврата на базу `MergeBoard` пере-проверит battledTiers и снимет
     // «NEW!»-ярлыки с этих тиров. См. core/storage.ts → battledTiers + mergeBoard.ts.
     update((st) => {
       const seen = new Set<number>(st.battledTiers);
@@ -804,179 +228,40 @@ export class WorldScene extends Phaser.Scene {
       fieldColsOverride: s.field.cols,
     });
     const arsenals = laneArsenals(s.field);
-    this.level = level;
-    this.maxObsCount = Math.max(...level.lanes.map((l) => l.obstacles.length), 1);
+    const maxObsCount = Math.max(...level.lanes.map((l) => l.obstacles.length), 1);
+    const laneWidth = DESIGN_WIDTH / level.cols;
+    const chestRowY = obstacleY(maxObsCount - 1) - CHEST_GAP;
+    const worldTopY = chestRowY - CAMERA_TOP_BUFFER;
 
-    this.buildBattleVisuals(arsenals);
+    this.battle.resetForBattle(level, maxObsCount, chestRowY, worldTopY, laneWidth);
+    this.baseArt.extendRoadForBattle(worldTopY, this.battle.battleNodes);
+    for (let li = 0; li < level.cols; li++) {
+      this.battle.buildLaneRuntime(li, arsenals[li] ?? []);
+    }
+
     this.buildSpeedHud();
     this.mainUI.setBottomVisible(false);
-    this.gradientTop?.setVisible(false);
-    this.gradientBot?.setVisible(false);
+    this.baseArt.setGradientsVisible(false);
     // invPlaceArt/trashPlaceArt НЕ скрываем — они часть локации, текст-лейблы на них
     // тоже остаются (scrollFactor=1) и уезжают с камерой во время боя естественно.
 
-    this.playOpeningSequence();
-  }
-
-  private buildBattleVisuals(arsenals: number[][]): void {
-    const cols = this.level!.cols;
-    this.laneWidth = DESIGN_WIDTH / cols;
-    this.chestRowY = this.obstacleY(this.maxObsCount - 1) - CHEST_GAP;
-    this.worldTopY = this.chestRowY - CAMERA_TOP_BUFFER;
-    this.buildRoadTiles();
-
-    for (let li = 0; li < cols; li++) {
-      this.laneRuntimes.push(this.buildLaneRuntime(li, arsenals[li] ?? []));
-    }
-  }
-
-  private buildLaneRuntime(li: number, tiers: number[]): LaneRuntime {
-    const lane = this.level!.lanes[li];
-    const x = (li + 0.5) * this.laneWidth;
-    const tokenSize = Math.min(this.laneWidth * 0.42, 44);
-    this.obstacleTokenSize = tokenSize;
-
-    // Сундук — container с body+lid.
-    const chestBody = this.add.rectangle(0, 10, 54, 22, 0xd4af37)
-      .setOrigin(0.5).setStrokeStyle(2, 0x000000, 0.4);
-    const chestLid = this.add.rectangle(0, -8, 58, 14, 0xb8941f)
-      .setOrigin(0.5).setStrokeStyle(2, 0x000000, 0.4);
-    const chest = this.add.container(x, this.chestRowY, [chestBody, chestLid]);
-    chest.setData('body', chestBody);
-    chest.setData('lid', chestLid);
-    this.battleNodes.push(chest);
-
-    // Препятствия.
-    const obs: ObRuntime[] = [];
-    const barW = Math.min(tokenSize * 1.4, 60);
-    const barH = 4;
-    for (let i = 0; i < lane.obstacles.length; i++) {
-      const ob = lane.obstacles[i];
-      obs.push(this.makeObRuntime(ob, x, this.obstacleY(i), tokenSize, barW, barH));
-    }
-
-    // Арсенал: sorted DESC (strongest first). Active = strongest.
-    const sorted = [...tiers].sort((a, b) => b - a);
-    const arsenal: ArsenalWeapon[] = sorted.map(t => {
-      const def = getWeapon(t);
-      return { tier: t, hits: def.hits, maxHits: def.hits };
-    });
-    const active = arsenal.shift() ?? null;
-
-    return {
-      li,
-      state: 'walking',
-      fighter: this.fighters[li],
-      active,
-      arsenal,
-      obs,
-      chest,
-      chestY: this.chestRowY,
-      chestOpened: false,
-      reachedChest: false,
-      scrapCollected: 0,
-      weaponsCollected: [],
-      lootboxesCollected: [],
-      backstepTargetY: 0,
-    };
-  }
-
-  private makeObRuntime(
-    ob: Obstacle,
-    x: number,
-    y: number,
-    tokenSize: number,
-    barW: number,
-    barH: number,
-  ): ObRuntime {
-    let token: Phaser.GameObjects.GameObject;
-    if (ob.kind === 'zombie') {
-      token = this.add.circle(x, y, tokenSize / 2, zombieColor(ob.zombieTier ?? 1))
-        .setStrokeStyle(2, 0x000000, 0.4);
-    } else if (ob.kind === 'crate') {
-      token = this.add.rectangle(x, y, tokenSize, tokenSize, 0x8b5a2b)
-        .setStrokeStyle(2, 0x000000, 0.4);
-    } else {
-      token = this.add.circle(x, y, tokenSize / 4, 0x9aa0a6);
-    }
-    this.battleNodes.push(token);
-    let bar: Phaser.GameObjects.Rectangle | null = null;
-    let barBg: Phaser.GameObjects.Rectangle | null = null;
-    let hpText: Phaser.GameObjects.Text | null = null;
-    if (ob.kind === 'zombie' || ob.kind === 'crate') {
-      const barY = y - tokenSize / 2 - 9;
-      const barX = x - barW / 2;
-      barBg = this.add.rectangle(barX, barY, barW, barH, 0x333333).setOrigin(0, 0.5);
-      bar = this.add.rectangle(barX, barY, barW, barH, 0xee3333).setOrigin(0, 0.5);
-      hpText = this.add.text(x, barY - 4, String(ob.hp), {
-        fontFamily: 'monospace', fontSize: '10px', color: '#ffcccc',
-      }).setOrigin(0.5, 1);
-      this.battleNodes.push(barBg, bar, hpText);
-    }
-    return {
-      kind: ob.kind,
-      token, bar, barBg, hpText,
-      hp: ob.hp,
-      maxHp: ob.hp,
-      scrap: ob.scrap ?? 0,
-      givesWeapon: ob.kind === 'crate' ? (ob.givesWeapon ?? false) : false,
-      zombieTier: ob.kind === 'zombie' ? (ob.zombieTier ?? 0) : 0,
-      stunnedUntil: 0,
-      dead: false,
-    };
-  }
-
-  private obstacleY(idx: number): number {
-    return GATE_Y - FIRST_ZOMBIE_OFFSET - idx * ZOMBIE_SPACING;
-  }
-
-  // ============================= Opening sequence ===============================
-
-  private playOpeningSequence(): void {
-    const gateL = this.baseLocation?.byId.get('base.gate_l') ?? null;
-    const gateR = this.baseLocation?.byId.get('base.gate_r') ?? null;
-    const shdL = this.baseLocation?.byId.get('base.gate_l_shd') ?? null;
-    const shdR = this.baseLocation?.byId.get('base.gate_r_shd') ?? null;
-    const proceed = (): void => this.spawnAndDispatchFighters();
-    const leftTargets = [gateL, shdL].filter((x): x is Phaser.GameObjects.Image => x != null);
-    const rightTargets = [gateR, shdR].filter((x): x is Phaser.GameObjects.Image => x != null);
-    if (leftTargets.length > 0 || rightTargets.length > 0) {
-      for (const obj of [...leftTargets, ...rightTargets]) {
-        if (obj.getData('defaultX') == null) obj.setData('defaultX', obj.x);
-      }
-      // Ворота открываются — параллельно зажигаем лампы (fade-in 600ms → blink loop).
-      this.startLampBlink();
-      const off = 220;
-      if (leftTargets.length > 0) {
-        this.tweens.add({ targets: leftTargets, x: `-=${off}`, duration: 600, ease: 'Sine.Out' });
-      }
-      if (rightTargets.length > 0) {
-        this.tweens.add({
-          targets: rightTargets, x: `+=${off}`, duration: 600, ease: 'Sine.Out',
-          onComplete: proceed,
-        });
-      } else {
-        this.time.delayedCall(600, proceed);
-      }
-    } else {
-      proceed();
-    }
+    this.baseArt.openGates(() => this.spawnAndDispatchFighters());
   }
 
   private spawnAndDispatchFighters(): void {
-    const cols = this.level!.cols;
+    const cols = this.battle.level!.cols;
     const laneStartY = GATE_Y - 10;
 
     // Обновить visual бойцов под арсенал (берётся из laneRuntimes).
     for (let li = 0; li < cols; li++) {
-      const lane = this.laneRuntimes[li];
-      if (lane) this.updateFighterWeaponVisual(lane);
+      const lane = this.battle.laneRuntimes[li];
+      if (lane) this.fightersCtl.renderFighterWeapon(lane);
     }
 
     let arrived = 0;
     const total = cols;
     for (let li = 0; li < total; li++) {
-      const fighter = this.fighters[li];
+      const fighter = this.fightersCtl.fighters[li];
       if (!fighter) {
         arrived++;
         if (arrived === total) this.startBattle();
@@ -1001,12 +286,12 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private startBattle(): void {
-    if (this.resultShown) return;
+    if (this.battle.resultShown) return;
     this.mode = 'battle';
     // С этого момента tickBattle() в update() начнёт двигать бойцов и зомби.
   }
 
-  // ============================== Speed/skip HUD ================================
+  // ============================== Speed / skip HUD =============================
 
   private buildSpeedHud(): void {
     this.skipBtn = new Button(this, {
@@ -1041,59 +326,20 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  // ============================== Result modal ==================================
-
   private skipBattle(): void {
-    // Skip: проматываем runtime до конца (через ускорение цикла).
-    // Простое: tweens.timeScale большой → быстро. Но за это время tickBattle может
-    // не успеть обработать всё. Делаем по-другому: продолжаем симулировать в `tickBattle`
-    // но с большим dt, до завершения всех лайн.
-    if (this.resultShown) return;
-    if (!this.level) return;
-    // «Виртуальные» большие тики до полного завершения (cap на безопасность).
-    const MAX_ITERATIONS = 10000;
-    let iter = 0;
-    while (iter < MAX_ITERATIONS) {
-      iter++;
-      const now = this.time.now + iter * 50;
-      for (const lane of this.laneRuntimes) {
-        this.moveLaneZombies(lane, 50, now);
-      }
-      for (const lane of this.laneRuntimes) {
-        this.tickLane(lane, 50, now);
-      }
-      const allDone = this.laneRuntimes.every(l => l.state === 'at_chest' || l.state === 'finished');
-      if (allDone) break;
-    }
-    this.showResult(true);
+    const result = this.battle.skip();
+    if (result) this.showResult(true);
   }
 
-  private assembleResult(): BattleResult {
-    const lanes = this.laneRuntimes.map(r => ({
-      reachedChest: r.reachedChest,
-      collectedScrap: r.scrapCollected,
-      collectedWeapons: r.weaponsCollected as WeaponTier[],
-      collectedLootboxes: r.lootboxesCollected,
-      steps: [],
-    }));
-    return {
-      level: this.level?.number ?? 0,
-      passed: lanes.some(l => l.reachedChest),
-      lanes,
-      totalScrap: lanes.reduce((a, l) => a + l.collectedScrap, 0),
-      totalWeapons: lanes.flatMap(l => l.collectedWeapons),
-      totalLootboxes: lanes.flatMap(l => l.collectedLootboxes),
-    };
-  }
+  // ============================== Result modal =================================
 
   private showResult(_skipped = false): void {
-    if (this.resultShown) return;
-    this.resultShown = true;
+    if (this.mode === 'showing_result') return;
     this.mode = 'showing_result';
     this.tweens.timeScale = 1;
     this.time.timeScale = 1;
 
-    const result = this.assembleResult();
+    const result = this.battle.assembleResult();
     const state = getState();
     // Бонус прохождения вычисляется ДО applyBattleResult — там тир может
     // апгрейднуться, а игроку нужно показать сумму по тиру, который он видел.
@@ -1155,13 +401,10 @@ export class WorldScene extends Phaser.Scene {
     this.time.timeScale = 1;
 
     this.mode = 'base';
-    this.resultShown = false;
-    this.allLanesFinishedAt = 0;
-    this.level = null;
-    this.laneRuntimes = [];
+    this.battle.level = null;
+    this.battle.laneRuntimes = [];
     this.mainUI.setBottomVisible(true);
-    this.gradientTop?.setVisible(true);
-    this.gradientBot?.setVisible(true);
+    this.baseArt.setGradientsVisible(true);
     this.refreshButtons();
 
     // Камера обратно к базе; battleNodes уничтожаем в onComplete (чтобы не было
@@ -1169,22 +412,13 @@ export class WorldScene extends Phaser.Scene {
     this.tweens.add({
       targets: this.cameras.main, scrollY: 0, duration: 600, ease: 'Sine.InOut',
       onComplete: () => {
-        for (const n of this.battleNodes) n.destroy();
-        this.battleNodes = [];
+        for (const n of this.battle.battleNodes) n.destroy();
+        this.battle.battleNodes = [];
       },
     });
 
-    // Закрыть ворота + тени.
-    for (const id of ['base.gate_l', 'base.gate_l_shd', 'base.gate_r', 'base.gate_r_shd']) {
-      const obj = this.baseLocation?.byId.get(id);
-      if (!obj) continue;
-      const def = obj.getData('defaultX');
-      if (typeof def === 'number') {
-        this.tweens.add({ targets: obj, x: def, duration: 600, ease: 'Sine.InOut' });
-      }
-    }
-    // Параллельно гасим лампы (fade-out 600ms — синхронно с закрытием ворот).
-    this.fadeLampsOff();
+    // Закрыть ворота + погасить лампы.
+    this.baseArt.closeGates();
 
     // Восстановить мердж-плитки.
     this.board.relayout(getState().field);
@@ -1192,174 +426,16 @@ export class WorldScene extends Phaser.Scene {
     this.hud.refresh();
 
     // Бойцы persistent — tween назад к idle (или пересоздать под новый cols).
-    const prevFighterCount = this.fighters.length;
+    const prevFighterCount = this.fightersCtl.fighters.length;
     const newCols = getState().field.cols;
     if (prevFighterCount !== newCols) {
-      this.ensureFightersExist();
+      this.fightersCtl.ensureExists();
     } else {
-      for (let li = 0; li < this.fighters.length; li++) {
-        const f = this.fighters[li];
-        if (!f) continue;
-        this.tweens.killTweensOf(f);
-        f.setScale(1);
-        const targetX = (li + 0.5) * (DESIGN_WIDTH / newCols);
-        this.tweens.add({
-          targets: f, x: targetX, y: FIGHTER_IDLE_Y, duration: 600, ease: 'Sine.InOut',
-        });
-        this.resetFighterVisualToIdle(li);
-      }
+      this.fightersCtl.tweenAllToIdle(newCols);
     }
   }
 
-  // ============================== Base art / Road / Gradients ===================
-
-  private buildGradients(): void {
-    const make = (key: string, w: number, h: number, flipped: boolean): void => {
-      if (this.textures.exists(key)) return;
-      const tex = this.textures.createCanvas(key, w, h);
-      if (!tex) return;
-      const ctx = tex.getContext();
-      const [y0, y1] = flipped ? [0, h] : [h, 0];
-      const grd = ctx.createLinearGradient(0, y0, 0, y1);
-      grd.addColorStop(0, 'rgba(0,0,0,0.5)');
-      grd.addColorStop(0.5, 'rgba(0,0,0,0.5)');
-      grd.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = grd;
-      ctx.fillRect(0, 0, w, h);
-      tex.refresh();
-    };
-    make('grad-top', DESIGN_WIDTH, 215, true);
-    make('grad-bot', DESIGN_WIDTH, 222, false);
-    const top = this.add.image(0, 0, 'grad-top').setOrigin(0, 0).setScrollFactor(0).setDepth(250);
-    const bot = this.add.image(0, 1058, 'grad-bot').setOrigin(0, 0).setScrollFactor(0).setDepth(99);
-    this.gradientTop = top;
-    this.gradientBot = bot;
-  }
-
-  private buildBaseArt(): void {
-    const json = this.cache.json.get('base-layout');
-    if (!json) return;
-    const manifest = parseLocation(json);
-    this.baseManifest = manifest;
-    if (manifest.layers.length === 0) return;
-    this.baseLocation = buildLocation(
-      this,
-      manifest,
-      { originX: 0, originY: -2524, scale: 1, baseDepth: -50, texturePrefix: 'base' },
-      loadOverrides(),
-    );
-    // Изначально ворота закрыты → лампы выключены (alpha 0). При открытии ворот в
-    // playOpeningSequence запускаем мигание; при закрытии в returnToBase — гасим.
-    for (const lamp of this.getLamps()) lamp.setAlpha(0);
-  }
-
-  // ============================== Lamp blink ====================================
-
-  /** Спрайты светящихся ламп из base-локации (l + r, в любом порядке). */
-  private getLamps(): Phaser.GameObjects.Image[] {
-    const out: Phaser.GameObjects.Image[] = [];
-    const l = this.baseLocation?.byId.get('base.lamp_l');
-    const r = this.baseLocation?.byId.get('base.lamp_r');
-    if (l) out.push(l);
-    if (r) out.push(r);
-    return out;
-  }
-
-  /** Запустить мигание ламп: fade-in alpha→1 за время открытия ворот, затем yoyo 1↔0.5. */
-  private startLampBlink(): void {
-    this.stopLampTweens();
-    const lamps = this.getLamps();
-    if (lamps.length === 0) return;
-    const fadeIn = this.tweens.add({
-      targets: lamps,
-      alpha: 1,
-      duration: 600,
-      ease: 'Sine.Out',
-      onComplete: () => {
-        const blink = this.tweens.add({
-          targets: lamps,
-          alpha: 0.5,
-          duration: 700,
-          ease: 'Sine.InOut',
-          yoyo: true,
-          repeat: -1,
-        });
-        this.lampTweens.push(blink);
-      },
-    });
-    this.lampTweens.push(fadeIn);
-  }
-
-  /** Погасить лампы (ворота закрылись): fade-out alpha→0 синхронно со схлопыванием ворот. */
-  private fadeLampsOff(): void {
-    this.stopLampTweens();
-    const lamps = this.getLamps();
-    if (lamps.length === 0) return;
-    this.tweens.add({
-      targets: lamps,
-      alpha: 0,
-      duration: 600,
-      ease: 'Sine.InOut',
-    });
-  }
-
-  /** Остановить все активные tweens на лампах (не трогает alpha — это делают вызывающие). */
-  private stopLampTweens(): void {
-    for (const t of this.lampTweens) t.stop();
-    this.lampTweens = [];
-    for (const lamp of this.getLamps()) this.tweens.killTweensOf(lamp);
-  }
-
-  private buildRoadStripe(bottomY: number, topY: number, intoBattle: boolean): number {
-    const tilesetKey = 'base.road_l1';
-    if (!this.textures.exists(tilesetKey) || bottomY <= topY) return bottomY;
-    const tileset = this.baseManifest ? findTileset(this.baseManifest, 'road_l1') : null;
-    const sourceW = tileset?.width ?? 463;
-    const sourceH = tileset?.height ?? 314;
-    const aspect = sourceH / sourceW;
-    const tileW = DESIGN_WIDTH / 2;
-    const tileH = tileW * aspect;
-    const stepY = tileH - 1;
-    const overshoot = stepY * 0.6;
-    const totalH = bottomY - topY + overshoot;
-    const tileCount = Math.max(1, Math.ceil(totalH / stepY));
-    const leftCx = DESIGN_WIDTH / 4;
-    const rightCx = (3 * DESIGN_WIDTH) / 4;
-    const container = this.baseRoadContainer;
-    const dx = container?.x ?? 0;
-    const dy = container?.y ?? 0;
-    let topReached = bottomY;
-    for (let i = 0; i < tileCount; i++) {
-      const cy = bottomY - tileH / 2 - i * stepY;
-      const left = this.add.image(leftCx - dx, cy - dy, tilesetKey).setOrigin(0.5).setDisplaySize(tileW, tileH);
-      const right = this.add.image(rightCx - dx, cy - dy, tilesetKey).setOrigin(0.5).setDisplaySize(tileW, tileH).setFlipX(true);
-      if (container) container.add([left, right]);
-      else { left.setDepth(-49.5); right.setDepth(-49.5); }
-      if (intoBattle) this.battleNodes.push(left, right);
-      topReached = cy - tileH / 2;
-    }
-    return topReached;
-  }
-
-  private buildBaseRoad(): void {
-    this.baseRoadContainer = this.add.container(0, 0).setDepth(-49.5);
-    this.baseRoadTopY = this.buildRoadStripe(GATE_Y, 0, false);
-    // base.road не в `layers` манифеста (рендерится динамически здесь), поэтому
-    // locationLoader не накладывает на него built-in manifest-override. Делаем явно,
-    // чтобы команда-настройки (положение/depth) из base.json применялись и к road.
-    const builtin = this.baseManifest?.overrides?.['base.road'];
-    if (builtin) applyOverride(this.baseRoadContainer, builtin);
-  }
-
-  private buildRoadTiles(): void {
-    const baseTopWorld = this.baseRoadTopY + (this.baseRoadContainer?.y ?? 0);
-    const targetTop = this.worldTopY - 200;
-    if (targetTop < baseTopWorld) {
-      this.buildRoadStripe(baseTopWorld + 1, targetTop, true);
-    }
-  }
-
-  // ============================== Base UI =======================================
+  // ============================== Base UI ======================================
 
   private buildBaseUI(): void {
     const s = getState();
@@ -1421,6 +497,7 @@ export class WorldScene extends Phaser.Scene {
     this.mainUI = new MainScreenUI(this, {
       onProduce: () => { if (this.mode === 'base') this.produce(); },
       onBattle: () => { if (this.mode === 'base') this.goBattle(); },
+      // MVP stubs: UI кнопки есть, фичи отложены до пост-MVP.
       onSettings: () => this.toast('Настройки — пока не реализовано'),
       onProfile: () => this.toast('Профиль — пока не реализовано'),
       onUpgrade: () => this.toast('Апгрейд — пока не реализовано'),
@@ -1461,82 +538,7 @@ export class WorldScene extends Phaser.Scene {
     this.board.setTrashZone(this.trashRect);
   }
 
-  // ============================== Idle fighters =================================
-
-  private ensureFightersExist(): void {
-    const cols = getState().field.cols;
-    const laneWidth = DESIGN_WIDTH / cols;
-    const tokenSize = Math.min(laneWidth * 0.42, 44);
-    if (this.fighters.length !== cols) {
-      for (const f of this.fighters) f?.destroy();
-      this.fighters = [];
-      this.fighterTierTexts = [];
-      this.fighterHitsTexts = [];
-      this.fighterRings = [];
-      this.fighterWeaponIcons = [];
-      for (let li = 0; li < cols; li++) {
-        this.createIdleFighter(li, laneWidth, tokenSize);
-      }
-      return;
-    }
-    for (let li = 0; li < cols; li++) {
-      const f = this.fighters[li];
-      if (!f) continue;
-      f.x = (li + 0.5) * laneWidth;
-      f.y = FIGHTER_IDLE_Y;
-      f.setScale(1);
-      this.resetFighterVisualToIdle(li);
-    }
-  }
-
-  private createIdleFighter(li: number, laneWidth: number, tokenSize: number): void {
-    const x = (li + 0.5) * laneWidth;
-    const ringColor = 0x55606e;
-    const circle = this.add.circle(0, 0, tokenSize * 0.6, 0x66ccff).setStrokeStyle(3, ringColor, 1);
-    const tierLabel = this.add.text(-tokenSize * 0.5, tokenSize * 0.5, '', {
-      fontFamily: 'Roboto, Arial Black, sans-serif', fontStyle: '900', fontSize: '13px', color: '#ffffff',
-    }).setOrigin(0.5);
-    tierLabel.setStroke('#000000', 3);
-    // Иконка оружия — сверху над бойцом. Использует 'weapon.t1' как placeholder (точно
-    // загружен Boot'ом). Texture/visible меняется в updateFighterWeaponVisual.
-    const initialKey = this.textures.exists('weapon.t1') ? 'weapon.t1' : '__DEFAULT';
-    const weaponIcon = this.add.image(0, -tokenSize * 0.95, initialKey)
-      .setOrigin(0.5).setVisible(false);
-    const hitsLabel = this.add.text(0, tokenSize * 0.7 + 4, '', {
-      fontFamily: 'monospace', fontSize: '12px', color: '#ffffff',
-    }).setOrigin(0.5);
-    hitsLabel.setStroke('#000000', 3);
-    const fighter = this.add
-      .container(x, FIGHTER_IDLE_Y, [circle, weaponIcon, tierLabel, hitsLabel])
-      .setDepth(5);
-    this.fighters[li] = fighter;
-    this.fighterTierTexts[li] = tierLabel;
-    this.fighterHitsTexts[li] = hitsLabel;
-    this.fighterRings[li] = circle;
-    this.fighterWeaponIcons[li] = weaponIcon;
-  }
-
-  private resetFighterVisualToIdle(li: number): void {
-    this.fighterTierTexts[li]?.setText('');
-    this.fighterHitsTexts[li]?.setText('');
-    this.fighterRings[li]?.setStrokeStyle(3, 0x55606e, 1);
-    this.fighterWeaponIcons[li]?.setVisible(false);
-  }
-
-  private syncTrashRect(): void {
-    const c = this.trashContainer;
-    const r = this.trashRect;
-    if (!c || !r) return;
-    const w = this.trashSize;
-    if (r.x !== c.x - w / 2 || r.y !== c.y - w / 2) {
-      r.x = c.x - w / 2;
-      r.y = c.y - w / 2;
-      r.w = w;
-      r.h = w;
-    }
-  }
-
-  // ============================== Base actions ==================================
+  // ============================== Base actions =================================
 
   private produce(): void {
     const s = getState();
@@ -1602,12 +604,19 @@ export class WorldScene extends Phaser.Scene {
     this.mainUI.setFightEnabled(this.mode === 'base');
   }
 
-  // ============================== Misc ==========================================
+  // ============================== Misc =========================================
 
-  private popText(x: number, y: number, msg: string, color: string): void {
-    const t = this.add.text(x, y, msg, { fontFamily: 'monospace', fontSize: '20px', color })
-      .setOrigin(0.5).setDepth(50);
-    this.tweens.add({ targets: t, y: y - 40, alpha: 0, duration: 700, onComplete: () => t.destroy() });
+  private syncTrashRect(): void {
+    const c = this.trashContainer;
+    const r = this.trashRect;
+    if (!c || !r) return;
+    const w = this.trashSize;
+    if (r.x !== c.x - w / 2 || r.y !== c.y - w / 2) {
+      r.x = c.x - w / 2;
+      r.y = c.y - w / 2;
+      r.w = w;
+      r.h = w;
+    }
   }
 
   private toast(msg: string): void {

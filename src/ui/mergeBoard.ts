@@ -779,7 +779,7 @@ export class MergeBoard {
         fontFamily: 'Inter, Roboto, Arial Black, sans-serif',
         fontStyle: '900',
         fontSize: `${badgeFontPx}px`,
-        color: 'rgba(0, 0, 0, 0.65)',
+        color: 'rgba(0, 0, 0, 0.30)',
       })
       .setOrigin(0.5);
     children.push(tierBadge);

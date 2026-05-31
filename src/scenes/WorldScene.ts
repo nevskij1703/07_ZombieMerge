@@ -699,7 +699,7 @@ export class WorldScene extends Phaser.Scene {
           fontFamily: 'Inter, Roboto, Arial Black, sans-serif',
           fontStyle: '900',
           fontSize: `${tierFont}px`,
-          color: 'rgba(0, 0, 0, 0.65)',
+          color: 'rgba(0, 0, 0, 0.30)',
         }).setOrigin(0.5);
         container.add([icon, tierBadge]);
         container.setScale(0);

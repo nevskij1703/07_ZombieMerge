@@ -122,6 +122,10 @@ export class MainScreenUI {
   private produceContainer!: Phaser.GameObjects.Container;
   private produceLabel: Phaser.GameObjects.Text;
   private produceCostText: Phaser.GameObjects.Text;
+  /** Монета рядом с ценой производства — позиция rebalanced в refresh() (см. ниже). */
+  private produceCoin!: Phaser.GameObjects.Image;
+  /** Left-anchor X цифры цены — фиксирован, монета двигается за концом числа. */
+  private produceCostX = 0;
 
   private scene: Phaser.Scene;
   private cb: MainScreenCallbacks;
@@ -182,37 +186,42 @@ export class MainScreenUI {
 
     const arrowsIcon = scene.add.image(0, 18, 'ui.arrows').setOrigin(0.5).setDisplaySize(28, 35);
 
-    // Cost группа справа: монета на фиксированной позиции, текст ПРАВО-выровнен
-    // (origin 1, 0.5) — gap между правым краем цифры и левым краем монеты ВСЕГДА
-    // 6 px, не зависит от длины числа («5» / «20» / «999» одинаково).
-    const PRODUCE_COIN_X = 100;
+    // СИММЕТРИЧНЫЙ layout кнопки: weapon icon ↔ arrows ↔ cost (gap ~15 px у обеих
+    // сторон от стрелок). Цена — LEFT-anchor на фиксированной позиции, монета
+    // двигается за её правым краем в refresh() (gap до монеты фиксирован 6 px).
+    // Если cost-text был бы right-anchor, gap от стрелок до текста плавал бы при
+    // разной ширине цены — поэтому пришлось переключить.
+    const PRODUCE_WEAPON_X = -55;             // центр weapon icon
+    const PRODUCE_ARROWS_HALF = 14;           // arrows 28×35, half-width 14
+    const SIDE_GAP = 15;                      // зазор weapon→arrows = arrows→cost
+    const PRODUCE_COST_X = PRODUCE_ARROWS_HALF + SIDE_GAP;  // = 29, левый край цифры
     const PRODUCE_COIN_SIZE = 26;
     const COST_TO_COIN_GAP = 6;
-    const PRODUCE_COST_RIGHT_X = PRODUCE_COIN_X - PRODUCE_COIN_SIZE / 2 - COST_TO_COIN_GAP;
+    this.produceCostX = PRODUCE_COST_X;
+
     this.produceCostText = scene.add
-      .text(PRODUCE_COST_RIGHT_X, 16, '0', {
+      .text(PRODUCE_COST_X, 16, '0', {
         fontFamily: FONT,
         fontStyle: '900',
         fontSize: '32px',
         color: '#FFFFFF',
       })
-      .setOrigin(1, 0.5);
+      .setOrigin(0, 0.5);
     this.produceCostText.setStroke('#000000', 1);
-    const produceCoin = scene.add
-      .image(PRODUCE_COIN_X, 16, 'ui.coin')
+    // Монета — стартовая позиция-плейсхолдер, refresh() сразу пересчитает её x
+    // по фактической ширине цены.
+    this.produceCoin = scene.add
+      .image(PRODUCE_COST_X + 30 + COST_TO_COIN_GAP + PRODUCE_COIN_SIZE / 2, 16, 'ui.coin')
       .setOrigin(0.5)
       .setDisplaySize(PRODUCE_COIN_SIZE, PRODUCE_COIN_SIZE);
 
-    // Weapon icon сдвинут ближе к стрелкам обмена (с x=-100 → x=-55), tier digit
-    // вместе с ним (правый-нижний угол иконки). Чёрный полупрозрачный — универсал.
-    const PRODUCE_WEAPON_X = -55;
     this.produceWeaponIcon = scene.add.image(PRODUCE_WEAPON_X, 16, 'weapon.t1').setOrigin(0.5);
     this.produceWeaponTier = scene.add
       .text(PRODUCE_WEAPON_X + 20, 16 + 20, '?', {
         fontFamily: 'Inter, Roboto, Arial Black, sans-serif',
         fontStyle: '900',
         fontSize: '18px',
-        color: 'rgba(0, 0, 0, 0.65)',
+        color: 'rgba(0, 0, 0, 0.30)',
       })
       .setOrigin(0.5);
 
@@ -220,7 +229,7 @@ export class MainScreenUI {
       this.produceLabel,
       this.produceWeaponIcon, this.produceWeaponTier,
       arrowsIcon,
-      produceCoin, this.produceCostText,
+      this.produceCoin, this.produceCostText,
     ]);
     const produceOverlay = makePressOverlay(this.scene, 252, 123);
     produceContainer.add([produceBg, produceContent, produceOverlay]);
@@ -375,6 +384,10 @@ export class MainScreenUI {
     }
     this.produceWeaponTier.setText(String(s.workshopTier));
     this.produceCostText.setText(String(cost));
+    // Монета двигается за концом цифры — gap 6 px фикс. независимо от длины числа.
+    const COST_TO_COIN_GAP = 6;
+    const coinHalf = this.produceCoin.displayWidth / 2;
+    this.produceCoin.x = this.produceCostX + this.produceCostText.width + COST_TO_COIN_GAP + coinHalf;
     const canProduce = s.scrap >= cost && !isFull(s.field);
     this.btnProduce.setEnabled(canProduce);
   }

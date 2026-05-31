@@ -18,7 +18,16 @@ export interface LevelGenContext {
 }
 
 /** Применить rewardMultiplier к relevant subset баланса, возвращая «scaled-copy».
- *  Остальные поля (zombies, weapons, workshop, field, etc.) остаются исходными. */
+ *  Остальные поля (zombies, weapons, workshop, field, etc.) остаются исходными.
+ *
+ *  Что масштабируется:
+ *   • scrapPerPile (лом на дороге) — × mult.
+ *   • chest.scrapMin/Max (награда scrap-сундука) — × mult.
+ *   • chest.rewardWeights.weapon и .lootbox — × mult (scrap-вес не трогаем). weightedPick
+ *     нормирует → nerf (mult<1) поднимает шанс scrap-награды, buff — шанс weapon/lootbox.
+ *   • lootbox.mediumShare — внутри lootbox-наград сдвигаем долю elite vs medium.
+ *     elite-доля = (1 - mediumShare) × mult, clamp[0..1]. mediumShare = 1 - eliteShare.
+ *     buff: больше elite (крутых) лутбоксов. nerf: почти все medium (обычные). */
 function scaleBalance(b: Balance, mult: number): Balance {
   if (!mult || mult === 1.0) return b;
   const scaledScrapPerPile = Math.max(1, Math.round(b.levelGen.scrapPerPile * mult));
@@ -27,6 +36,9 @@ function scaleBalance(b: Balance, mult: number): Balance {
     scaledChestScrapMin,
     Math.round(b.chest.scrapMax * mult),
   );
+  const baseEliteShare = 1 - b.lootbox.mediumShare;
+  const scaledEliteShare = Math.max(0, Math.min(1, baseEliteShare * mult));
+  const scaledMediumShare = 1 - scaledEliteShare;
   return {
     ...b,
     levelGen: { ...b.levelGen, scrapPerPile: scaledScrapPerPile },
@@ -34,14 +46,15 @@ function scaleBalance(b: Balance, mult: number): Balance {
       ...b.chest,
       scrapMin: scaledChestScrapMin,
       scrapMax: scaledChestScrapMax,
-      // Веса scrap-награды НЕ трогаем; weapon+lootbox масштабируем на mult.
-      // weightedPick нормирует — итог: nerf (mult<1) поднимает шанс scrap-награды,
-      // buff (mult>1) — шанс weapon/lootbox.
       rewardWeights: {
         scrap: b.chest.rewardWeights.scrap,
         weapon: b.chest.rewardWeights.weapon * mult,
         lootbox: b.chest.rewardWeights.lootbox * mult,
       },
+    },
+    lootbox: {
+      ...b.lootbox,
+      mediumShare: scaledMediumShare,
     },
   };
 }

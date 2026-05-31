@@ -296,7 +296,20 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  /** Движение зомби в линии: к бойцу (вниз), с учётом видимости/stun/collision/crate. */
+  /** Движение зомби в линии: к бойцу (вниз), с учётом видимости/stun/collision/crate.
+   *
+   *  Правило коробок: zombie «видит бойца» только если между ним и бойцом нет НИ ОДНОЙ
+   *  живой коробки. Идём по линии от бойца к концу (idx=0 → N-1), флагом `crateAhead`
+   *  помечаем, что между текущим zombie и бойцом стоит хотя бы одна коробка. Такой
+   *  zombie стоит на месте (но всё равно блокирует zombies за собой).
+   *
+   *  Когда боец разбивает коробку → `ob.dead = true` → коробка пропускается в этом
+   *  loop'е и `crateAhead` для zombies за ней сбрасывается → они начинают идти.
+   *
+   *  Несколько коробок на линии: zombies между ними стоят пока хоть одна коробка
+   *  ВПЕРЕДИ них жива (то есть ближе к бойцу). Когда боец «прорубается» через
+   *  ближайшую коробку — zombies сразу за ней оживают, а zombies между ними и
+   *  следующей коробкой — продолжают стоять. */
   private moveLaneZombies(lane: LaneRuntime, dt: number, now: number): void {
     const cam = this.cameras.main;
     const viewTopY = cam.scrollY;
@@ -309,6 +322,7 @@ export class WorldScene extends Phaser.Scene {
     if (!fighter) return;
 
     let upperLimitY = Math.min(fighter.y - tokenSize - ZOMBIE_STOP_MARGIN, gateLimitY);
+    let crateAhead = false; // живая коробка между бойцом и текущей точкой обхода
 
     for (let idx = 0; idx < lane.obs.length; idx++) {
       const ob = lane.obs[idx];
@@ -316,8 +330,14 @@ export class WorldScene extends Phaser.Scene {
       if (ob.kind === 'scrap') continue; // не двигается, не блокирует
       const tobj = ob.token as Phaser.GameObjects.GameObject & { y: number };
       const currentY = tobj.y;
-      // Коробка не двигается, но блокирует.
+      // Коробка не двигается, блокирует, и «закрывает обзор» для всех zombies за ней.
       if (ob.kind === 'crate') {
+        upperLimitY = currentY - tokenSize - ZOMBIE_STOP_MARGIN;
+        crateAhead = true;
+        continue;
+      }
+      // Zombie за живой коробкой — стоит на месте (бойца не видит), но блокирует.
+      if (crateAhead) {
         upperLimitY = currentY - tokenSize - ZOMBIE_STOP_MARGIN;
         continue;
       }

@@ -15,7 +15,9 @@
     { "image": "inv_place", "width": 100, "height": 125 },
     { "image": "lootbox_cheap", "width": 100, "height": 100 },
     { "image": "lootbox_medium", "width": 100, "height": 100 },
-    { "image": "lootbox_elite", "width": 100, "height": 100 }
+    { "image": "lootbox_elite", "width": 100, "height": 100 },
+    { "image": "chest_close", "width": 995, "height": 1812 },
+    { "image": "chest_opened", "width": 995, "height": 1812 }
   ],
   "svgs": [
     { "image": "btn_brown", "width": 94, "height": 98 },

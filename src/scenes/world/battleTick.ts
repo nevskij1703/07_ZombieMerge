@@ -24,7 +24,7 @@ import { getWeapon } from '../../core/weapons';
 import { update, save } from '../../core/storage';
 import type { Hud } from '../../ui/hud';
 import { type FightersController, buildArsenal } from './fighters';
-import { openChestVisual, renderChestContent } from './chestReward';
+import { CHEST_DISPLAY_W, CHEST_DISPLAY_H, openChestVisual, renderChestContent } from './chestReward';
 import type { ArsenalWeapon, LaneRuntime, LaneState, ObRuntime } from './types';
 import {
   ATTACK_RANGE,
@@ -94,14 +94,19 @@ export class BattleTickEngine {
     this.obstacleTokenSize = tokenSize;
     this.deps.fighters.setTokenSize(tokenSize);
 
-    // Сундук — container с body+lid.
-    const chestBody = scene.add.rectangle(0, 10, 54, 22, 0xd4af37)
-      .setOrigin(0.5).setStrokeStyle(2, 0x000000, 0.4);
-    const chestLid = scene.add.rectangle(0, -8, 58, 14, 0xb8941f)
-      .setOrigin(0.5).setStrokeStyle(2, 0x000000, 0.4);
-    const chest = scene.add.container(x, this.chestRowY, [chestBody, chestLid]);
-    chest.setData('body', chestBody);
-    chest.setData('lid', chestLid);
+    // Сундук — PNG-Image (ui.chest_close → ui.chest_opened по openChestVisual).
+    // Fallback на цветной квадрат если текстура не загружена (dev без preload'а).
+    // origin (0.5, 1) — якорь по нижнему краю: база сундука сидит ровно на
+    // chestRowY (= позиция самого дальнего препятствия линии + CHEST_GAP), а
+    // высокая открытая крышка/тело расширяется ВВЕРХ, не наезжая на бойца внизу.
+    const chest = scene.textures.exists('ui.chest_close')
+      ? scene.add.image(x, this.chestRowY, 'ui.chest_close')
+          .setOrigin(0.5, 1)
+          .setDisplaySize(CHEST_DISPLAY_W, CHEST_DISPLAY_H)
+      : scene.add.image(x, this.chestRowY, '__DEFAULT')
+          .setOrigin(0.5, 1)
+          .setDisplaySize(CHEST_DISPLAY_W, CHEST_DISPLAY_H)
+          .setTint(0xd4af37);
     this.battleNodes.push(chest);
 
     // Препятствия.

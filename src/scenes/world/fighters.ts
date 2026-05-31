@@ -186,11 +186,24 @@ export class FightersController {
   }
 }
 
-/** Public helper: построить арсенал из набора тиров. Strongest first — порядок,
- *  который ожидает BattleTickEngine для switchWeapon. */
+/**
+ * Public helper: построить арсенал из набора тиров. Порядок СОХРАНЯЕТСЯ — это
+ * означает «оружие в порядке колонки мердж-поля, сверху вниз» (так как
+ * `laneArsenals` в `core/progression.ts` итерирует `r=0..rows-1` для каждой
+ * колонки → `tiers[0]` = самая ВЕРХНЯЯ клетка столбца).
+ *
+ * Боец сначала использует `active` (верхнее оружие колонки), затем по мере
+ * истощения `switchWeapon` берёт `rest[0]`, `rest[1]`, … — то есть идёт по
+ * колонке СВЕРХУ ВНИЗ независимо от тира. Это позволяет игроку самому
+ * управлять «очерёдностью» оружий в бою через расстановку на мердж-поле.
+ *
+ * (Раньше была сортировка DESC по тиру — strongest first. Изменено, потому что
+ * приоритет по позиции даёт больше контроля игроку: можно класть слабое оружие
+ * первым, чтобы «протестировать» линию, или сильное — чтобы быстро прорвать
+ * её начало.)
+ */
 export function buildArsenal(tiers: number[]): { active: ArsenalWeapon | null; rest: ArsenalWeapon[] } {
-  const sorted = [...tiers].sort((a, b) => b - a);
-  const arsenal: ArsenalWeapon[] = sorted.map((t) => {
+  const arsenal: ArsenalWeapon[] = tiers.map((t) => {
     const def = getWeapon(t);
     return { tier: t, hits: def.hits, maxHits: def.hits };
   });

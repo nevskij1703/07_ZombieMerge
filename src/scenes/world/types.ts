@@ -48,7 +48,8 @@ export interface LaneRuntime {
   /** Остальные оружия (отсортированы DESC по тиру — strongest first). */
   arsenal: ArsenalWeapon[];
   obs: ObRuntime[];
-  chest: Phaser.GameObjects.Container;
+  /** Image (ui.chest_close → ui.chest_opened по openChestVisual). */
+  chest: Phaser.GameObjects.Image;
   chestY: number;
   chestOpened: boolean;
   reachedChest: boolean;

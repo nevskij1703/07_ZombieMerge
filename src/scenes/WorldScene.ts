@@ -25,7 +25,7 @@
 
 import Phaser from 'phaser';
 import { SceneKey } from './sceneKeys';
-import { DESIGN_WIDTH, DESIGN_HEIGHT, TIER_COLORS } from '../config/constants';
+import { DESIGN_WIDTH, DESIGN_HEIGHT, TIER_COLORS, WEAPON_FRAME_PX } from '../config/constants';
 import type { Level, BattleResult, LootboxKind, WeaponTier, Obstacle } from '../types';
 import { getState, save, update } from '../core/storage';
 import { applyBattleResult, laneArsenals, bestWeaponTier } from '../core/progression';
@@ -614,7 +614,10 @@ export class WorldScene extends Phaser.Scene {
       tierText?.setText(`T${w.tier}`);
       hitsText?.setText(String(w.hits));
       ring?.setStrokeStyle(3, TIER_COLORS[w.tier] ?? 0x66ccff, 1);
-      // Иконка оружия над бойцом — приоритет визуала.
+      // Иконка оружия над бойцом — приоритет визуала. Масштаб по эталонному
+      // WEAPON_FRAME_PX (фрейм Figma 136 = 272 PNG @ pngScale 2), а не по max(iw,ih).
+      // Иначе длинная винтовка визуально стала бы такой же, как короткий нож, —
+      // пропадала бы дизайнерская разница между классами оружий.
       const key = `weapon.t${w.tier}`;
       if (iconImg) {
         if (this.textures.exists(key)) {
@@ -623,7 +626,7 @@ export class WorldScene extends Phaser.Scene {
           const iw = (tex as { width: number }).width ?? 1;
           const ih = (tex as { height: number }).height ?? 1;
           const target = (this.obstacleTokenSize || 44) * 0.85;
-          const s = target / Math.max(iw, ih);
+          const s = target / WEAPON_FRAME_PX;
           iconImg.setDisplaySize(iw * s, ih * s).setVisible(true);
         } else {
           iconImg.setVisible(false);

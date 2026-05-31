@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import type { FieldState, LootboxKind, WeaponTier } from '../types';
-import { TIER_COLORS, UI, COLORS } from '../config/constants';
+import { TIER_COLORS, UI, COLORS, WEAPON_FRAME_PX } from '../config/constants';
 import { weaponName } from '../core/weapons';
 import { canMergeIndices, mergeInto, moveOrSwap } from '../core/merge';
 import { isLootboxCode, isWeaponCellValue, lootboxKindOfCode } from '../core/lootbox';
@@ -394,13 +394,15 @@ export class MergeBoard {
     const children: Phaser.GameObjects.GameObject[] = [bg];
 
     if (hasIcon) {
-      // Иконка: заполняет ~85% ячейки, сохраняя aspect ratio (через setDisplaySize по большей стороне).
+      // Иконка: фрейм Figma (136px) → 85% ячейки. PNG bbox у разных оружий отличается
+      // (винтовка торчит из фрейма, нож вписан ровно) — масштабируем по эталонному
+      // WEAPON_FRAME_PX, а не по `max(iw, ih)`, чтобы сохранить относительные размеры,
+      // заложенные дизайнером в Figma (винтовка визуально длиннее ножа).
       const tex = this.scene.textures.get(iconKey).getSourceImage();
       const iconW = (tex as { width: number }).width ?? 1;
       const iconH = (tex as { height: number }).height ?? 1;
-      const maxSide = Math.max(iconW, iconH);
-      const targetMax = size * 0.85;
-      const scale = targetMax / maxSide;
+      const targetFrame = size * 0.85;
+      const scale = targetFrame / WEAPON_FRAME_PX;
       const icon = this.scene.add
         .image(0, -size * 0.04, iconKey)
         .setOrigin(0.5)

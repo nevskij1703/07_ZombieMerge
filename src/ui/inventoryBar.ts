@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { getState } from '../core/storage';
 import { isLootboxCode, lootboxKindOfCode } from '../core/lootbox';
+import { WEAPON_FRAME_PX } from '../config/constants';
 
 /**
  * Инвентарь = бесконечный стек. Одна квадратная ячейка размером ~70% ячейки мердж-поля,
@@ -87,15 +88,16 @@ export class InventoryBar {
       this.slotLabel.setColor(lbKind === 'elite' ? '#ffd27f' : '#d8a8ff');
     } else {
       // Оружие: пробуем иконку weapon.t<N>, fallback на текст «T<N>».
+      // Масштаб — по эталонному WEAPON_FRAME_PX (фрейм Figma 136px = 272 PNG @ scale 2).
+      // НЕ по max(iw,ih) — это убило бы относительные размеры оружий (см. constants.ts).
       const iconKey = `weapon.t${top}`;
       if (this.scene.textures.exists(iconKey)) {
         this.slotLabel.setText('');
         const tex = this.scene.textures.get(iconKey).getSourceImage();
         const iw = (tex as { width: number }).width ?? 1;
         const ih = (tex as { height: number }).height ?? 1;
-        const maxSide = Math.max(iw, ih);
         const target = this.size * 0.85;
-        const s = target / maxSide;
+        const s = target / WEAPON_FRAME_PX;
         const icon = this.scene.add
           .image(0, 0, iconKey)
           .setOrigin(0.5)

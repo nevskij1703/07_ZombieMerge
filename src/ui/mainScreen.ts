@@ -11,7 +11,7 @@
 //   • «999» (style_EBLEKK): Roboto 900, 32px, white + stroke #000 1px.
 
 import Phaser from 'phaser';
-import { TIER_COLORS } from '../config/constants';
+import { TIER_COLORS, WEAPON_FRAME_PX } from '../config/constants';
 import { getState } from '../core/storage';
 import { produceCost } from '../core/economy';
 import { isFull } from '../core/merge';
@@ -312,9 +312,9 @@ export class MainScreenUI {
         const tex = this.scene.textures.get(iconKey).getSourceImage();
         const iw = (tex as { width: number }).width ?? 1;
         const ih = (tex as { height: number }).height ?? 1;
-        const maxSide = Math.max(iw, ih);
-        // Целевой размер иконки в кнопке Produce — ~52px по большей стороне.
-        const scale = 52 / maxSide;
+        // Целевой размер фрейма Figma в кнопке Produce — ~52px. Масштаб — по эталонному
+        // WEAPON_FRAME_PX, чтобы относительные размеры оружий из Figma сохранялись.
+        const scale = 52 / WEAPON_FRAME_PX;
         this.produceWeaponIcon.setDisplaySize(iw * scale, ih * scale);
         this.produceWeaponIcon.clearTint(); // снять fallback-tint если был раньше
       } else {

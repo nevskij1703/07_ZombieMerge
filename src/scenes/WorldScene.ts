@@ -154,6 +154,8 @@ export class WorldScene extends Phaser.Scene {
   private baseManifest: LocationManifest | null = null;
   private baseRoadTopY = 0;
   private baseRoadContainer: Phaser.GameObjects.Container | null = null;
+  /** Активные tweens мигания ламп (yoyo alpha 50%↔100% когда ворота открыты). */
+  private lampTweens: Phaser.Tweens.Tween[] = [];
   layoutEditor: LayoutEditor | null = null;
   private lootRng: () => number = () => Math.random();
 
@@ -711,8 +713,8 @@ export class WorldScene extends Phaser.Scene {
     this.mainUI.setBottomVisible(false);
     this.gradientTop?.setVisible(false);
     this.gradientBot?.setVisible(false);
-    this.invPlaceArt?.setVisible(false);
-    this.trashPlaceArt?.setVisible(false);
+    // invPlaceArt/trashPlaceArt НЕ скрываем — они часть локации, текст-лейблы на них
+    // тоже остаются (scrollFactor=1) и уезжают с камерой во время боя естественно.
 
     this.playOpeningSequence(arsenals);
   }
@@ -843,6 +845,8 @@ export class WorldScene extends Phaser.Scene {
       for (const obj of [...leftTargets, ...rightTargets]) {
         if (obj.getData('defaultX') == null) obj.setData('defaultX', obj.x);
       }
+      // Ворота открываются — параллельно зажигаем лампы (fade-in 600ms → blink loop).
+      this.startLampBlink();
       const off = 220;
       if (leftTargets.length > 0) {
         this.tweens.add({ targets: leftTargets, x: `-=${off}`, duration: 600, ease: 'Sine.Out' });
@@ -1054,8 +1058,6 @@ export class WorldScene extends Phaser.Scene {
     this.mainUI.setBottomVisible(true);
     this.gradientTop?.setVisible(true);
     this.gradientBot?.setVisible(true);
-    this.invPlaceArt?.setVisible(true);
-    this.trashPlaceArt?.setVisible(true);
     this.refreshButtons();
 
     // Камера обратно к базе; battleNodes уничтожаем в onComplete (чтобы не было
@@ -1077,6 +1079,8 @@ export class WorldScene extends Phaser.Scene {
         this.tweens.add({ targets: obj, x: def, duration: 600, ease: 'Sine.InOut' });
       }
     }
+    // Параллельно гасим лампы (fade-out 600ms — синхронно с закрытием ворот).
+    this.fadeLampsOff();
 
     // Восстановить мердж-плитки.
     this.board.relayout(getState().field);
@@ -1140,6 +1144,66 @@ export class WorldScene extends Phaser.Scene {
       { originX: 0, originY: -2524, scale: 1, baseDepth: -50, texturePrefix: 'base' },
       loadOverrides(),
     );
+    // Изначально ворота закрыты → лампы выключены (alpha 0). При открытии ворот в
+    // playOpeningSequence запускаем мигание; при закрытии в returnToBase — гасим.
+    for (const lamp of this.getLamps()) lamp.setAlpha(0);
+  }
+
+  // ============================== Lamp blink ====================================
+
+  /** Спрайты светящихся ламп из base-локации (l + r, в любом порядке). */
+  private getLamps(): Phaser.GameObjects.Image[] {
+    const out: Phaser.GameObjects.Image[] = [];
+    const l = this.baseLocation?.byId.get('base.lamp_l');
+    const r = this.baseLocation?.byId.get('base.lamp_r');
+    if (l) out.push(l);
+    if (r) out.push(r);
+    return out;
+  }
+
+  /** Запустить мигание ламп: fade-in alpha→1 за время открытия ворот, затем yoyo 1↔0.5. */
+  private startLampBlink(): void {
+    this.stopLampTweens();
+    const lamps = this.getLamps();
+    if (lamps.length === 0) return;
+    const fadeIn = this.tweens.add({
+      targets: lamps,
+      alpha: 1,
+      duration: 600,
+      ease: 'Sine.Out',
+      onComplete: () => {
+        const blink = this.tweens.add({
+          targets: lamps,
+          alpha: 0.5,
+          duration: 700,
+          ease: 'Sine.InOut',
+          yoyo: true,
+          repeat: -1,
+        });
+        this.lampTweens.push(blink);
+      },
+    });
+    this.lampTweens.push(fadeIn);
+  }
+
+  /** Погасить лампы (ворота закрылись): fade-out alpha→0 синхронно со схлопыванием ворот. */
+  private fadeLampsOff(): void {
+    this.stopLampTweens();
+    const lamps = this.getLamps();
+    if (lamps.length === 0) return;
+    this.tweens.add({
+      targets: lamps,
+      alpha: 0,
+      duration: 600,
+      ease: 'Sine.InOut',
+    });
+  }
+
+  /** Остановить все активные tweens на лампах (не трогает alpha — это делают вызывающие). */
+  private stopLampTweens(): void {
+    for (const t of this.lampTweens) t.stop();
+    this.lampTweens = [];
+    for (const lamp of this.getLamps()) this.tweens.killTweensOf(lamp);
   }
 
   private buildRoadStripe(bottomY: number, topY: number, intoBattle: boolean): number {

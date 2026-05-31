@@ -15,6 +15,11 @@ export interface LevelGenContext {
   /** Динамический множитель наград (из state.rewardMultiplier). 1.0 = нейтрально.
    *  Применяется к: scrapPerPile, chest.scrapMin/Max, и weapon+lootbox весам сундука. */
   rewardMultiplier?: number;
+  /** Override числа колонок поля (= числа линий боя). Нужен когда поле было РАНО
+   *  расширено через `pendingFieldUpgrade` — state.field.cols опередил уровень-based
+   *  `getFieldSize(level).cols`. Без этого override число дорог окажется меньше числа
+   *  бойцов, и в бою останутся «болтающиеся» бойцы без линии. Берётся max(default, override). */
+  fieldColsOverride?: number;
 }
 
 /** Применить rewardMultiplier к relevant subset баланса, возвращая «scaled-copy».
@@ -122,7 +127,11 @@ export function generateLevel(level: number, ctx?: LevelGenContext): Level {
   const rawBalance = getBalance();
   const b = scaleBalance(rawBalance, ctx?.rewardMultiplier ?? 1.0);
   const rng = makeRng(Math.imul(level, 2654435761) ^ 0x9e3779b9);
-  const { cols, rows } = getFieldSize(level);
+  const def = getFieldSize(level);
+  // Если поле игрока было расширено раньше уровня через ранний апгрейд, используем
+  // его cols — иначе число линий боя не совпадёт с количеством бойцов.
+  const cols = Math.max(def.cols, ctx?.fieldColsOverride ?? 0);
+  const rows = def.rows;
   const roadLength = Math.round(
     b.levelGen.baseRoadLength + b.levelGen.roadLengthPerLevel * (level - 1),
   );

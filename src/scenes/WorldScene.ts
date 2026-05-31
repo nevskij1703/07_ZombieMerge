@@ -787,6 +787,10 @@ export class WorldScene extends Phaser.Scene {
       workshopTier: s.workshopTier,
       bestTier: bestWeaponTier(s),
       rewardMultiplier: s.rewardMultiplier,
+      // Если поле было расширено раньше уровня (pendingFieldUpgrade), генерируем
+      // нужное число линий — иначе arsenals.length (= field.cols) разойдётся с
+      // level.lanes.length и часть бойцов останется без дороги.
+      fieldColsOverride: s.field.cols,
     });
     const arsenals = laneArsenals(s.field);
     this.level = level;

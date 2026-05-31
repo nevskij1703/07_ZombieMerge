@@ -300,8 +300,13 @@ export class WorldScene extends Phaser.Scene {
       this.tickLane(lane, dt, now);
     }
 
-    // 3) Проверка завершения уровня — все лайны в {at_chest, finished}.
-    const allDone = this.laneRuntimes.every(l => l.state === 'at_chest' || l.state === 'finished');
+    // 3) Проверка завершения уровня — все лайны в {at_chest, retreating, finished}.
+    //    КЛЮЧЕВОЕ: 'retreating' тоже считается «done» — как только последний боец НАЧАЛ
+    //    убегать на базу, запускаем таймер RESULT_DELAY_MS. Без этого ждали бы пока он
+    //    физически добежит за нижний край экрана (~4-5 секунд), что слишком долго.
+    const allDone = this.laneRuntimes.every(l =>
+      l.state === 'at_chest' || l.state === 'retreating' || l.state === 'finished',
+    );
     if (allDone && !this.resultShown) {
       if (this.allLanesFinishedAt === 0) {
         this.allLanesFinishedAt = now;

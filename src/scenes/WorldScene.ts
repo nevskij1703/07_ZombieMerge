@@ -25,7 +25,7 @@
 
 import Phaser from 'phaser';
 import { SceneKey } from './sceneKeys';
-import { DESIGN_WIDTH, DESIGN_HEIGHT, TIER_COLORS, WEAPON_FRAME_PX, LOOTBOX_ICON_SCALE } from '../config/constants';
+import { DESIGN_WIDTH, DESIGN_HEIGHT, TIER_COLORS, WEAPON_FRAME_PX, LOOTBOX_ICON_SCALE, NEW_BADGE_MIN_TIER } from '../config/constants';
 import type { Level, BattleResult, LootboxKind, WeaponTier, Obstacle } from '../types';
 import { getState, save, update } from '../core/storage';
 import { applyBattleResult, laneArsenals, bestWeaponTier, levelPassBonus } from '../core/progression';
@@ -782,6 +782,17 @@ export class WorldScene extends Phaser.Scene {
     this.battleNodes = [];
 
     this.ensureFightersExist();
+
+    // Пометить все weapon-тиры с поля (≥ NEW_BADGE_MIN_TIER) как «битые». После
+    // возврата на базу `MergeBoard.makeTile` пере-проверит battledTiers и снимет
+    // «NEW!»-ярлыки с этих тиров. См. core/storage.ts → battledTiers + mergeBoard.ts.
+    update((st) => {
+      const seen = new Set<number>(st.battledTiers);
+      for (const v of st.field.cells) {
+        if (isWeaponCellValue(v) && v >= NEW_BADGE_MIN_TIER) seen.add(v);
+      }
+      st.battledTiers = Array.from(seen).sort((a, b) => a - b);
+    });
 
     const level = generateLevel(s.level, {
       workshopTier: s.workshopTier,

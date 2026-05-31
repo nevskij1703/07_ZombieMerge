@@ -23,6 +23,15 @@ export const migrations: Record<number, MigrationFn> = {
       ? state.pendingFieldUpgrade
       : false,
   }),
+  // v3 -> v4: добавили battledTiers — список тиров, с которыми игрок ходил в бой.
+  // Используется для «NEW!»-ярлыка на новых тирах оружия (≥ NEW_BADGE_MIN_TIER).
+  // У существующих сейвов поля не было — стартуем с []. Это означает что у текущих
+  // игроков на ВСЕХ оружиях ≥5 тира одноразово вспыхнет «NEW!», пока они не сходят
+  // в бой. Считаем это допустимым (онбординг-сигнал).
+  4: (state) => ({
+    ...state,
+    battledTiers: Array.isArray(state?.battledTiers) ? state.battledTiers : [],
+  }),
 };
 
 export function getCurrentSchemaVersion(): number {

@@ -24,6 +24,7 @@ export function DEFAULT_STATE(): SaveState {
     strongStreak: 0,
     weakStreak: 0,
     pendingFieldUpgrade: false,
+    battledTiers: [],
   };
 }
 
@@ -75,6 +76,7 @@ function mergeDefaults(state: any): SaveState {
     merged.field.cells = resizeCells(merged.field.cells, need);
   }
   if (!Array.isArray(merged.inventory)) merged.inventory = [];
+  if (!Array.isArray(merged.battledTiers)) merged.battledTiers = [];
   return merged;
 }
 

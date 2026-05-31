@@ -1,9 +1,10 @@
 import Phaser from 'phaser';
 import type { FieldState, LootboxKind, WeaponTier } from '../types';
-import { UI, WEAPON_FRAME_PX, LOOTBOX_ICON_SCALE } from '../config/constants';
+import { UI, WEAPON_FRAME_PX, LOOTBOX_ICON_SCALE, NEW_BADGE_MIN_TIER } from '../config/constants';
 import { weaponName } from '../core/weapons';
 import { canMergeIndices, mergeInto, moveOrSwap } from '../core/merge';
 import { isLootboxCode, isWeaponCellValue, lootboxKindOfCode } from '../core/lootbox';
+import { getState } from '../core/storage';
 
 export interface BoardCallbacks {
   /** Вызывается после любого изменения поля (персист + обновить HUD/кнопки). */
@@ -818,6 +819,28 @@ export class MergeBoard {
     }
   }
 
+  /**
+   * Нужно ли рисовать «NEW!»-ярлык на плитке этого тира? Правило:
+   *   1) tier ≥ NEW_BADGE_MIN_TIER (для младших тиров никогда не показываем);
+   *   2) этого тира ЕЩЁ НЕТ в state.battledTiers (игрок не ходил с ним в бой).
+   *
+   * `getState()` синхронный, читает кеш — дешёво вызывать на каждый makeTile.
+   * `battledTiers` пополняется в `WorldScene.goBattle` сразу перед стартом боя;
+   * после возврата `board.relayout(state.field)` пересоздаст плитки и бейдж
+   * пропадёт для тиров, попавших в список (даже если уровень не пройден).
+   */
+  private shouldShowNewBadge(tier: WeaponTier): boolean {
+    if (tier < NEW_BADGE_MIN_TIER) return false;
+    try {
+      const battled = getState().battledTiers;
+      return !battled.includes(tier);
+    } catch {
+      // Если по какой-то причине state не доступен — лучше промолчать,
+      // чем уронить рендер плитки.
+      return false;
+    }
+  }
+
   private makeTile(index: number, tier: WeaponTier): Phaser.GameObjects.Container {
     const c = this.centerOf(index);
     const iconKey = `weapon.t${tier}`;
@@ -882,6 +905,32 @@ export class MergeBoard {
       })
       .setOrigin(0.5);
     children.push(tierBadge);
+
+    // «NEW!»-ярлык слева-сверху, если этот тир ≥ NEW_BADGE_MIN_TIER и игрок ещё не
+    // ходил с ним в бой. Источник правды — `state.battledTiers` (см. types.ts), туда
+    // тиры добавляются в `WorldScene.goBattle`. Бейдж исчезнет автоматически после
+    // первого боя на следующем `rebuildTiles` (вызывается в returnToBase →
+    // board.relayout). Размер шрифта — адаптивный к cellSize, как у tier-цифры.
+    if (this.shouldShowNewBadge(tier)) {
+      const NEW_BADGE_REF_FONT = 18; // px @ cellSize=136 (эталон 3×3 поля)
+      const newFontPx = Math.max(
+        9,
+        Math.round((this.cellSize * NEW_BADGE_REF_FONT) / REFERENCE_CELL_SIZE),
+      );
+      const newBadge = this.scene.add
+        .text(-this.cellSize * 0.42, -this.cellSize * 0.34, 'NEW!', {
+          fontFamily: 'Inter, Roboto, Arial Black, sans-serif',
+          fontStyle: '900',
+          fontSize: `${newFontPx}px`,
+          color: '#FF2D2D',
+        })
+        .setOrigin(0, 0.5);
+      // Белая обводка для читаемости на любом фоне (тёмный/светлый/иконка оружия).
+      newBadge.setStroke('#FFFFFF', Math.max(1, Math.round(newFontPx / 7)));
+      // Лёгкий drop shadow — отделяет ярлык от подложки.
+      newBadge.setShadow(0, 1, 'rgba(0,0,0,0.55)', 2, false, true);
+      children.push(newBadge);
+    }
 
     const tile = this.scene.add.container(c.x, c.y, children);
     if (iconObj) tile.setData('icon', iconObj);

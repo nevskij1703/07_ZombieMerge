@@ -57,6 +57,11 @@ export interface SaveState {
    *  оружие с тиром ≥ cols×rows текущего поля. На СЛЕДУЮЩЕМ завершённом уровне форсирует
    *  переход к следующему размеру поля (вместо ожидания level-based threshold). */
   pendingFieldUpgrade: boolean;
+  /** Тиры, с которыми игрок УЖЕ ходил в бой. Источник правды для «NEW!»-бейджа в
+   *  `MergeBoard.makeTile`: если тир ≥ NEW_BADGE_MIN_TIER и его НЕТ в этом списке —
+   *  плитка получает красный ярлык. Заполняется в `WorldScene.goBattle` (все weapon-
+   *  тиры с field на момент старта боя, фильтр по min-tier). НЕ сбрасывается. */
+  battledTiers: WeaponTier[];
 }
 
 // --- Уровень / бой ---

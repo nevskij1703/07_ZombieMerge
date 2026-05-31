@@ -40,6 +40,9 @@ export interface WeaponDef {
   damagePerHit: number;
   /** Сколько ударов до истощения оружия (выносливость/боезапас, скрыт). */
   hits: number;
+  /** Базовое имя PNG-иконки (без расширения, без пути). Файл лежит в
+   *  `public/art/weapons/<icon>.png`. В Boot регистрируется как `weapon.t<tier>` текстура. */
+  icon: string;
 }
 
 export interface FieldSizeStep {
@@ -175,23 +178,30 @@ export interface Balance {
 }
 
 export const balance: Balance = {
-  maxTier: 12,
+  maxTier: 19,
 
-  // Ресурс — линейный N+3 (T1=4 ... T12=15). Оружия быстрее выходят из строя,
-  // нужно чаще производить/мерджить. damagePerHit — без изменений.
+  // 19 тиров оружия. Порядок и имена — из figma (164:69). hits линейный N+3.
+  // damagePerHit растёт ×1.4 за тир. Иконки в public/art/weapons/, поле `icon`.
   weapons: {
-    1: { name: 'Труба', damagePerHit: 2, hits: 4 },
-    2: { name: 'Лом', damagePerHit: 3, hits: 5 },
-    3: { name: 'Топор', damagePerHit: 5, hits: 6 },
-    4: { name: 'Нож', damagePerHit: 7, hits: 7 },
-    5: { name: 'Катана', damagePerHit: 10, hits: 8 },
-    6: { name: 'Пистолет', damagePerHit: 14, hits: 9 },
-    7: { name: 'Узи', damagePerHit: 20, hits: 10 },
-    8: { name: 'Автомат', damagePerHit: 28, hits: 11 },
-    9: { name: 'Пулемёт', damagePerHit: 40, hits: 12 },
-    10: { name: 'Гранатомёт', damagePerHit: 56, hits: 13 },
-    11: { name: 'Огнемёт', damagePerHit: 78, hits: 14 },
-    12: { name: 'Рейлган', damagePerHit: 110, hits: 15 },
+    1:  { name: 'Дубина',      icon: 't01_club',           damagePerHit: 2,    hits: 4  },
+    2:  { name: 'Труба',       icon: 't02_pipe',           damagePerHit: 3,    hits: 5  },
+    3:  { name: 'Кирка',       icon: 't03_pickaxe',        damagePerHit: 5,    hits: 6  },
+    4:  { name: 'Топор',       icon: 't04_fireaxe',        damagePerHit: 7,    hits: 7  },
+    5:  { name: 'Нож',         icon: 't05_knife',          damagePerHit: 10,   hits: 8  },
+    6:  { name: 'Мачете',      icon: 't06_machete',        damagePerHit: 14,   hits: 9  },
+    7:  { name: 'Бензопила',   icon: 't07_chainsaw',       damagePerHit: 20,   hits: 10 },
+    8:  { name: 'Огнемёт',     icon: 't08_flamethrower',   damagePerHit: 28,   hits: 11 },
+    9:  { name: 'Револьвер',   icon: 't09_revolver',       damagePerHit: 40,   hits: 12 },
+    10: { name: 'Пистолет',    icon: 't10_pistol',         damagePerHit: 56,   hits: 13 },
+    11: { name: 'Узи',         icon: 't11_uzi',            damagePerHit: 78,   hits: 14 },
+    12: { name: 'Дробовик',    icon: 't12_shotgun',        damagePerHit: 110,  hits: 15 },
+    13: { name: 'Автомат',     icon: 't13_ak',             damagePerHit: 155,  hits: 16 },
+    14: { name: 'Винтовка',    icon: 't14_sniper',         damagePerHit: 215,  hits: 17 },
+    15: { name: 'Рейлган',     icon: 't15_railgun',        damagePerHit: 300,  hits: 18 },
+    16: { name: 'Гранатомёт',  icon: 't16_grenadelauncher',damagePerHit: 420,  hits: 19 },
+    17: { name: 'РПГ',         icon: 't17_rpg',            damagePerHit: 590,  hits: 20 },
+    18: { name: 'Тесла-пушка', icon: 't18_tesla',          damagePerHit: 830,  hits: 21 },
+    19: { name: 'Лазертаг',    icon: 't19_lazertag',       damagePerHit: 1160, hits: 22 },
   },
 
   workshop: {
@@ -209,8 +219,15 @@ export const balance: Balance = {
       10: 210,
       11: 290,
       12: 400,
+      13: 560,
+      14: 780,
+      15: 1100,
+      16: 1500,
+      17: 2100,
+      18: 3000,
+      19: 4200,
     },
-    // Цех 1→4 к L22; дальше не растёт — гэп с Полем (растёт к 12) расширяется к эндгейму.
+    // Цех 1→4 к L22; дальше не растёт — гэп с Полем (растёт к T19) расширяется к эндгейму.
     upgradeAtLevels: [4, 12, 22],
   },
 

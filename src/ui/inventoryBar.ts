@@ -7,6 +7,9 @@ import { isLootboxCode, lootboxKindOfCode } from '../core/lootbox';
  * показывает только верх стека (последний добытый). Tap → pop с конца, положить в случайную
  * свободную клетку поля (`core/merge.ts → pullFromInventory`).
  *
+ * Если у верха стека есть текстура `weapon.t<N>` — рисуем её. Иначе fallback: текст `T<N>`.
+ * Для лутбоксов рисуем эмодзи 📦.
+ *
  * Все визуалы внутри `container` (origin = центр ячейки). Это позволяет двигать инвентарь
  * как один объект через LayoutEditor.
  */
@@ -17,6 +20,7 @@ export class InventoryBar {
   private size = 0;
   private slot!: Phaser.GameObjects.Rectangle;
   private slotLabel!: Phaser.GameObjects.Text;
+  private slotIcon: Phaser.GameObjects.Image | null = null;
 
   constructor(scene: Phaser.Scene, cx: number, cy: number, size: number, onPull: () => void) {
     this.scene = scene;
@@ -33,6 +37,8 @@ export class InventoryBar {
     this.size = size;
     this.slot.destroy();
     this.slotLabel.destroy();
+    this.slotIcon?.destroy();
+    this.slotIcon = null;
     this.build();
     this.rebuild();
   }
@@ -63,21 +69,44 @@ export class InventoryBar {
 
   rebuild(): void {
     const inv = getState().inventory;
+    // Сброс предыдущей иконки.
+    if (this.slotIcon) {
+      this.slotIcon.destroy();
+      this.slotIcon = null;
+    }
     if (inv.length === 0) {
-      // Пусто — ничего не показываем поверх инвентарного арта.
       this.slotLabel.setText('');
       this.slot.disableInteractive();
       return;
     }
     const top = inv[inv.length - 1] as number;
     const isLb = isLootboxCode(top);
-    this.slotLabel.setText(isLb ? '📦' : `T${top}`);
-    // Цвет лейбла по тиру (для оружия) или белый (для лутбокса) — узнаваемо поверх арта.
-    const lbKind = lootboxKindOfCode(top);
-    const color = isLb
-      ? lbKind === 'elite' ? '#ffd27f' : '#d8a8ff'
-      : '#ffffff';
-    this.slotLabel.setColor(color);
+    if (isLb) {
+      this.slotLabel.setText('📦');
+      const lbKind = lootboxKindOfCode(top);
+      this.slotLabel.setColor(lbKind === 'elite' ? '#ffd27f' : '#d8a8ff');
+    } else {
+      // Оружие: пробуем иконку weapon.t<N>, fallback на текст «T<N>».
+      const iconKey = `weapon.t${top}`;
+      if (this.scene.textures.exists(iconKey)) {
+        this.slotLabel.setText('');
+        const tex = this.scene.textures.get(iconKey).getSourceImage();
+        const iw = (tex as { width: number }).width ?? 1;
+        const ih = (tex as { height: number }).height ?? 1;
+        const maxSide = Math.max(iw, ih);
+        const target = this.size * 0.85;
+        const s = target / maxSide;
+        const icon = this.scene.add
+          .image(0, 0, iconKey)
+          .setOrigin(0.5)
+          .setDisplaySize(iw * s, ih * s);
+        this.container.add(icon);
+        this.slotIcon = icon;
+      } else {
+        this.slotLabel.setText(`T${top}`);
+        this.slotLabel.setColor('#ffffff');
+      }
+    }
     this.slot.setInteractive({ useHandCursor: true });
   }
 }

@@ -384,27 +384,61 @@ export class MergeBoard {
     const c = this.centerOf(index);
     const size = this.cellSize * 0.92;
     const color = TIER_COLORS[tier] ?? 0x888888;
+    const iconKey = `weapon.t${tier}`;
+    const hasIcon = this.scene.textures.exists(iconKey);
 
-    const bg = this.scene.add.rectangle(0, 0, size, size, color).setOrigin(0.5);
-    bg.setStrokeStyle(3, 0x000000, 0.3);
-    const tierTxt = this.scene.add
-      .text(0, -size * 0.12, String(tier), {
-        fontFamily: 'monospace',
-        fontSize: `${Math.round(size * 0.34)}px`,
-        color: '#ffffff',
-      })
-      .setOrigin(0.5);
-    tierTxt.setStroke('#000000', 4);
-    const nameTxt = this.scene.add
-      .text(0, size * 0.27, weaponName(tier), {
-        fontFamily: 'monospace',
-        fontSize: `${Math.round(size * 0.12)}px`,
-        color: '#ffffff',
-      })
-      .setOrigin(0.5);
-    nameTxt.setStroke('#000000', 3);
+    // Фон-рамка с цветом по тиру (тонкая «карта» под иконкой).
+    const bg = this.scene.add.rectangle(0, 0, size, size, color, hasIcon ? 0.2 : 1).setOrigin(0.5);
+    bg.setStrokeStyle(3, color, 0.9);
 
-    const tile = this.scene.add.container(c.x, c.y, [bg, tierTxt, nameTxt]);
+    const children: Phaser.GameObjects.GameObject[] = [bg];
+
+    if (hasIcon) {
+      // Иконка: заполняет ~85% ячейки, сохраняя aspect ratio (через setDisplaySize по большей стороне).
+      const tex = this.scene.textures.get(iconKey).getSourceImage();
+      const iconW = (tex as { width: number }).width ?? 1;
+      const iconH = (tex as { height: number }).height ?? 1;
+      const maxSide = Math.max(iconW, iconH);
+      const targetMax = size * 0.85;
+      const scale = targetMax / maxSide;
+      const icon = this.scene.add
+        .image(0, -size * 0.04, iconKey)
+        .setOrigin(0.5)
+        .setDisplaySize(iconW * scale, iconH * scale);
+      children.push(icon);
+      // Маленький tier-индикатор в углу.
+      const tierBadge = this.scene.add
+        .text(-size * 0.4, size * 0.4, String(tier), {
+          fontFamily: 'Roboto, Arial Black, sans-serif',
+          fontStyle: '900',
+          fontSize: `${Math.round(size * 0.18)}px`,
+          color: '#ffffff',
+        })
+        .setOrigin(0.5);
+      tierBadge.setStroke('#000000', 3);
+      children.push(tierBadge);
+    } else {
+      // Fallback на старый стиль (цвет + цифра тира) — если иконка не загружена.
+      const tierTxt = this.scene.add
+        .text(0, -size * 0.12, String(tier), {
+          fontFamily: 'monospace',
+          fontSize: `${Math.round(size * 0.34)}px`,
+          color: '#ffffff',
+        })
+        .setOrigin(0.5);
+      tierTxt.setStroke('#000000', 4);
+      const nameTxt = this.scene.add
+        .text(0, size * 0.27, weaponName(tier), {
+          fontFamily: 'monospace',
+          fontSize: `${Math.round(size * 0.12)}px`,
+          color: '#ffffff',
+        })
+        .setOrigin(0.5);
+      nameTxt.setStroke('#000000', 3);
+      children.push(tierTxt, nameTxt);
+    }
+
+    const tile = this.scene.add.container(c.x, c.y, children);
     tile.setData('bg', bg);
     tile.setDepth(10); // поверх слотов-фонов (depth=1)
     return tile;

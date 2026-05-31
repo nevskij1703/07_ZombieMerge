@@ -83,8 +83,11 @@ export class MainScreenUI {
   readonly btnCards: UiButton;
   readonly btnShop: UiButton;
   readonly btnFight: UiButton;
-  private produceWeaponIcon: Phaser.GameObjects.Triangle;
+  private produceWeaponIcon: Phaser.GameObjects.Image;
   private produceWeaponTier: Phaser.GameObjects.Text;
+  /** Текущий тир, для которого создана produceWeaponIcon. Меняется только если тир сменился. */
+  private produceIconTier = 0;
+  private produceContainer!: Phaser.GameObjects.Container;
   private produceLabel: Phaser.GameObjects.Text;
   private produceCostText: Phaser.GameObjects.Text;
 
@@ -172,13 +175,10 @@ export class MainScreenUI {
       .setOrigin(0.5)
       .setDisplaySize(26, 26);
 
-    // Заглушка иконки оружия (в figma слой отсутствует — там должна быть иконка оружия;
-    // делаю симметричную правой группе слева от arrows): треугольник цвета T-тира +
-    // text «T?» справа от него (origin RIGHT, чтобы текст рос ВЛЕВО при росте номеров).
-    // button-center: треугольник at (-100, 16), tier text at (-26, 16) origin (1, 0.5).
-    this.produceWeaponIcon = scene.add
-      .triangle(-100, 16, 0, -13, -13, 13, 13, 13, 0xcccccc)
-      .setStrokeStyle(2, 0x000000, 0.7);
+    // Иконка оружия = PNG-текстура `weapon.t<N>` (заглушка-плейсхолдер на T1 — позже
+    // refresh() заменит на актуальный тир из workshopTier через setTexture).
+    // button-center: иконка at (-100, 16), tier-badge at (-26, 16).
+    this.produceWeaponIcon = scene.add.image(-100, 16, 'weapon.t1').setOrigin(0.5);
     this.produceWeaponTier = scene.add
       .text(-26, 16, 'T?', {
         fontFamily: FONT,
@@ -195,6 +195,7 @@ export class MainScreenUI {
       arrowsIcon,
       produceCoin, this.produceCostText,
     ]);
+    this.produceContainer = produceContainer;
     produceContainer.setSize(252, 123).setScrollFactor(0).setDepth(BUTTON_DEPTH);
     produceBg.setInteractive({ useHandCursor: true });
     produceBg.on('pointerup', () => {
@@ -302,8 +303,25 @@ export class MainScreenUI {
   refresh(): void {
     const s = getState();
     const cost = produceCost(s.workshopTier);
-    const color = TIER_COLORS[s.workshopTier] ?? 0xcccccc;
-    this.produceWeaponIcon.setFillStyle(color);
+    // Меняем иконку только если тир сменился — экономим setTexture + setDisplaySize вызовы.
+    if (this.produceIconTier !== s.workshopTier) {
+      this.produceIconTier = s.workshopTier;
+      const iconKey = `weapon.t${s.workshopTier}`;
+      if (this.scene.textures.exists(iconKey)) {
+        this.produceWeaponIcon.setTexture(iconKey);
+        const tex = this.scene.textures.get(iconKey).getSourceImage();
+        const iw = (tex as { width: number }).width ?? 1;
+        const ih = (tex as { height: number }).height ?? 1;
+        const maxSide = Math.max(iw, ih);
+        // Целевой размер иконки в кнопке Produce — ~52px по большей стороне.
+        const scale = 52 / maxSide;
+        this.produceWeaponIcon.setDisplaySize(iw * scale, ih * scale);
+        this.produceWeaponIcon.clearTint(); // снять fallback-tint если был раньше
+      } else {
+        // Fallback — раскрашиваем placeholder-иконку цветом тира.
+        this.produceWeaponIcon.setTint(TIER_COLORS[s.workshopTier] ?? 0xcccccc);
+      }
+    }
     this.produceWeaponTier.setText(`T${s.workshopTier}`);
     this.produceCostText.setText(String(cost));
     const canProduce = s.scrap >= cost && !isFull(s.field);

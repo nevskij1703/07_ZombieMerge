@@ -162,6 +162,7 @@ export class WorldScene extends Phaser.Scene {
   // === Fighters (persistent — created once in `create()`, anim'd between idle/battle) ===
   private fighters: Phaser.GameObjects.Container[] = [];
   private fighterTierTexts: Phaser.GameObjects.Text[] = [];
+  private fighterWeaponIcons: Phaser.GameObjects.Image[] = [];
   private fighterHitsTexts: Phaser.GameObjects.Text[] = [];
   private fighterRings: Phaser.GameObjects.Arc[] = [];
 
@@ -608,14 +609,31 @@ export class WorldScene extends Phaser.Scene {
     const tierText = this.fighterTierTexts[li];
     const hitsText = this.fighterHitsTexts[li];
     const ring = this.fighterRings[li];
+    const iconImg = this.fighterWeaponIcons[li];
     if (w && w.hits > 0) {
-      tierText?.setText(String(w.tier));
+      tierText?.setText(`T${w.tier}`);
       hitsText?.setText(String(w.hits));
       ring?.setStrokeStyle(3, TIER_COLORS[w.tier] ?? 0x66ccff, 1);
+      // Иконка оружия над бойцом — приоритет визуала.
+      const key = `weapon.t${w.tier}`;
+      if (iconImg) {
+        if (this.textures.exists(key)) {
+          iconImg.setTexture(key);
+          const tex = this.textures.get(key).getSourceImage();
+          const iw = (tex as { width: number }).width ?? 1;
+          const ih = (tex as { height: number }).height ?? 1;
+          const target = (this.obstacleTokenSize || 44) * 0.85;
+          const s = target / Math.max(iw, ih);
+          iconImg.setDisplaySize(iw * s, ih * s).setVisible(true);
+        } else {
+          iconImg.setVisible(false);
+        }
+      }
     } else {
       tierText?.setText('—');
       hitsText?.setText('');
       ring?.setStrokeStyle(3, 0x55606e, 1);
+      iconImg?.setVisible(false);
     }
   }
 
@@ -1375,6 +1393,7 @@ export class WorldScene extends Phaser.Scene {
       this.fighterTierTexts = [];
       this.fighterHitsTexts = [];
       this.fighterRings = [];
+      this.fighterWeaponIcons = [];
       for (let li = 0; li < cols; li++) {
         this.createIdleFighter(li, laneWidth, tokenSize);
       }
@@ -1394,24 +1413,34 @@ export class WorldScene extends Phaser.Scene {
     const x = (li + 0.5) * laneWidth;
     const ringColor = 0x55606e;
     const circle = this.add.circle(0, 0, tokenSize * 0.6, 0x66ccff).setStrokeStyle(3, ringColor, 1);
-    const tierLabel = this.add.text(0, -2, '', {
-      fontFamily: 'monospace', fontSize: '20px', color: '#06121f',
+    const tierLabel = this.add.text(-tokenSize * 0.5, tokenSize * 0.5, '', {
+      fontFamily: 'Roboto, Arial Black, sans-serif', fontStyle: '900', fontSize: '13px', color: '#ffffff',
     }).setOrigin(0.5);
+    tierLabel.setStroke('#000000', 3);
+    // Иконка оружия — сверху над бойцом. Использует 'weapon.t1' как placeholder (точно
+    // загружен Boot'ом). Texture/visible меняется в updateFighterWeaponVisual.
+    const initialKey = this.textures.exists('weapon.t1') ? 'weapon.t1' : '__DEFAULT';
+    const weaponIcon = this.add.image(0, -tokenSize * 0.95, initialKey)
+      .setOrigin(0.5).setVisible(false);
     const hitsLabel = this.add.text(0, tokenSize * 0.7 + 4, '', {
       fontFamily: 'monospace', fontSize: '12px', color: '#ffffff',
     }).setOrigin(0.5);
     hitsLabel.setStroke('#000000', 3);
-    const fighter = this.add.container(x, FIGHTER_IDLE_Y, [circle, tierLabel, hitsLabel]).setDepth(5);
+    const fighter = this.add
+      .container(x, FIGHTER_IDLE_Y, [circle, weaponIcon, tierLabel, hitsLabel])
+      .setDepth(5);
     this.fighters[li] = fighter;
     this.fighterTierTexts[li] = tierLabel;
     this.fighterHitsTexts[li] = hitsLabel;
     this.fighterRings[li] = circle;
+    this.fighterWeaponIcons[li] = weaponIcon;
   }
 
   private resetFighterVisualToIdle(li: number): void {
     this.fighterTierTexts[li]?.setText('');
     this.fighterHitsTexts[li]?.setText('');
     this.fighterRings[li]?.setStrokeStyle(3, 0x55606e, 1);
+    this.fighterWeaponIcons[li]?.setVisible(false);
   }
 
   private syncTrashRect(): void {

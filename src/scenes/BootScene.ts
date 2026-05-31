@@ -4,6 +4,7 @@ import { load } from '../core/storage';
 import { migrationsSelfTest } from '../core/migrations';
 import { coreSelfTest, battleSelfTest, levelSanityTest } from '../core/selfTest';
 import { parseLocation, uniqueImages, type LocationManifest } from '../art/locationLoader';
+import { balance } from '../config/balance';
 
 // Точка инициализации. Двухфазная загрузка:
 //   1) JSON-манифесты локаций (base, ui).
@@ -26,6 +27,7 @@ export class BootScene extends Phaser.Scene {
 
     if (baseJson) this.queueLocationAssets(parseLocation(baseJson), 'base', './art/base/images');
     if (uiJson) this.queueUiAssets(uiJson as LocationManifest);
+    this.queueWeaponAssets();
 
     // Если что-то висит в очереди — стартуем загрузку. Иначе сразу финал.
     if (this.load.totalToLoad > 0) {
@@ -41,6 +43,19 @@ export class BootScene extends Phaser.Scene {
       const key = `${prefix}.${name}`;
       if (!this.textures.exists(key)) {
         this.load.image(key, `${basePath}/${name}.png`);
+      }
+    }
+  }
+
+  /** Иконки оружия по тирам (balance.weapons[N].icon → текстура weapon.t<N>). */
+  private queueWeaponAssets(): void {
+    const max = balance.maxTier;
+    for (let t = 1; t <= max; t++) {
+      const w = balance.weapons[t];
+      if (!w || !w.icon) continue;
+      const key = `weapon.t${t}`;
+      if (!this.textures.exists(key)) {
+        this.load.image(key, `./art/weapons/${w.icon}.png`);
       }
     }
   }

@@ -463,13 +463,22 @@ export class MergeBoard {
     }
 
     // Цифра тира в правом нижнем углу: чистая надпись без обводки/тени,
-    // Inter Black 900 32px, цвет #B7916B (тёплый коричневый — единый под всю палитру).
+    // Inter Black 900, цвет #B7916B (тёплый коричневый — единый под всю палитру).
+    // Размер шрифта АДАПТИВНЫЙ: 32px при cellSize 136 (это 3×3 / 2×3 поле — эталон),
+    // на других полях пропорционально (4×4 ≈ 24px, 5×5 ≈ 19px). Минимум 10px для
+    // читаемости на крайних мелких ячейках.
+    const REFERENCE_CELL_SIZE = 136;
+    const REFERENCE_BADGE_FONT = 32;
+    const badgeFontPx = Math.max(
+      10,
+      Math.round((this.cellSize * REFERENCE_BADGE_FONT) / REFERENCE_CELL_SIZE),
+    );
     const badgeOffset = this.cellSize * 0.35;
     const tierBadge = this.scene.add
       .text(badgeOffset, badgeOffset, String(tier), {
         fontFamily: 'Inter, Roboto, Arial Black, sans-serif',
         fontStyle: '900',
-        fontSize: '32px',
+        fontSize: `${badgeFontPx}px`,
         color: '#B7916B',
       })
       .setOrigin(0.5);

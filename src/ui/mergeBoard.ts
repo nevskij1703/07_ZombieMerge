@@ -399,7 +399,12 @@ export class MergeBoard {
 
   private makeTile(index: number, tier: WeaponTier): Phaser.GameObjects.Container {
     const c = this.centerOf(index);
+    // ВАЖНО: `size` — это «контентный» бокс плитки для ИКОНКИ ОРУЖИЯ и tier-badge
+    // (~92% ячейки), а `frameSize` — это размер сАМОГО ФРЕЙМА-PNG, который должен
+    // точно перекрывать слот без отступа (`cellSize`). Раньше использовалось один
+    // size = 0.92 для всего, и фрейм выглядел меньше слота — отсюда видимый зазор.
     const size = this.cellSize * 0.92;
+    const frameSize = this.cellSize;
     const color = TIER_COLORS[tier] ?? 0x888888;
     const iconKey = `weapon.t${tier}`;
     const frameKey = `weapon.frame.t${tier}`;
@@ -410,8 +415,10 @@ export class MergeBoard {
     // либо Rectangle-fallback на цвете тира (если ассет не загружен).
     let bg: Phaser.GameObjects.Image | Phaser.GameObjects.Rectangle;
     if (hasFrame) {
-      bg = this.scene.add.image(0, 0, frameKey).setOrigin(0.5).setDisplaySize(size, size);
+      bg = this.scene.add.image(0, 0, frameKey).setOrigin(0.5).setDisplaySize(frameSize, frameSize);
     } else {
+      // Rectangle-fallback оставлен на старом размере (size = 0.92 ячейки) — у него есть
+      // setStrokeStyle, который должен оставаться внутри ячейки и не «утыкаться» в соседей.
       const rect = this.scene.add
         .rectangle(0, 0, size, size, color, hasIcon ? 0.2 : 1)
         .setOrigin(0.5);

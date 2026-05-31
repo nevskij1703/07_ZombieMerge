@@ -72,6 +72,10 @@ export class MergeBoard {
   private dragging = false;
   private dragTile: Phaser.GameObjects.Container | null = null;
 
+  // Идёт анимация мерджа — input ignored, чтобы пользователь не успел запустить
+  // вторую анимацию пока state.field уже изменился, но визуал ещё нет.
+  private animating = false;
+
   constructor(scene: Phaser.Scene, field: FieldState, rect: BoardRect, cb: BoardCallbacks) {
     this.scene = scene;
     this.field = field;
@@ -157,6 +161,7 @@ export class MergeBoard {
   }
 
   private onPointerDown(pointer: Phaser.Input.Pointer): void {
+    if (this.animating) return; // ignore во время merge-VFX
     const idx = this.pointerCell(pointer);
     if (idx === -1) return; // клик вне поля — это не наш жест (кнопки/HUD/инвентарь)
     this.downIndex = idx;
@@ -167,6 +172,7 @@ export class MergeBoard {
   }
 
   private onPointerMove(pointer: Phaser.Input.Pointer): void {
+    if (this.animating) return;
     if (this.downIndex === null) return;
     if (!this.dragging) {
       const dist = Phaser.Math.Distance.Between(this.downX, this.downY, pointer.worldX, pointer.worldY);
@@ -192,6 +198,7 @@ export class MergeBoard {
   }
 
   private onPointerUp(pointer: Phaser.Input.Pointer): void {
+    if (this.animating) return;
     if (this.downIndex === null) return;
     const from = this.downIndex;
     const wasDragging = this.dragging;
@@ -278,10 +285,168 @@ export class MergeBoard {
   }
 
   private applyMerge(from: number, to: number): void {
-    const result = mergeInto(this.field, from, to);
-    this.rebuildTiles();
-    this.cb.onChange();
-    if (result != null) this.cb.onMerge?.(result);
+    if (this.animating) return;
+    const fromTile = this.tileByIndex.get(from);
+    const toTile = this.tileByIndex.get(to);
+    // Если по какой-то причине одной из плиток нет визуально — fallback на старый
+    // мгновенный мердж (state-only). Не должно происходить в нормальном flow.
+    if (!fromTile || !toTile) {
+      const result = mergeInto(this.field, from, to);
+      this.rebuildTiles();
+      this.cb.onChange();
+      if (result != null) this.cb.onMerge?.(result);
+      return;
+    }
+    // Выдёргиваем плитки из map, чтобы rebuildTiles в финале не пытался их destroy'ить
+    // (мы сами их уничтожаем по окончании tween-цепи).
+    this.tileByIndex.delete(from);
+    this.tileByIndex.delete(to);
+    const toCenter = this.centerOf(to);
+    // Любая активная подсветка (preFX glow) уйдёт вместе с уничтожением иконок ниже.
+    this.playMergeVfx(fromTile, toTile, toCenter, () => {
+      fromTile.destroy();
+      toTile.destroy();
+      const result = mergeInto(this.field, from, to);
+      this.rebuildTiles();
+      this.cb.onChange();
+      if (result != null) this.cb.onMerge?.(result);
+    });
+  }
+
+  /**
+   * VFX мерджа двух плиток (~440ms всего).
+   *   Phase 1 (0-60ms):    fromTile долетает до центра to-ячейки (если был drag).
+   *   Phase 2 (60-180ms):  расходятся ±25% cellSize по X («накапливают энергию»).
+   *   Phase 3 (180-330ms): тряска (yoyo по 25ms, 3 repeat) с мелким смещением по Y.
+   *   Phase 4 (330-440ms): резкое схождение в центр, scale → 0.3, alpha → 0.
+   *   Phase 5 (440-640ms): вспышка ADD-blend круга в центре, новая плитка из rebuildTiles.
+   *   Параллельно (0-600ms): 10 «искр» (Arc + ADD blend) с радиусов ~1.0-1.6 cellSize
+   *     летят в центр с easeIn — должны исчезнуть к моменту вспышки.
+   */
+  private playMergeVfx(
+    fromTile: Phaser.GameObjects.Container,
+    toTile: Phaser.GameObjects.Container,
+    toCenter: { x: number; y: number },
+    onDone: () => void,
+  ): void {
+    this.animating = true;
+    const scene = this.scene;
+    const cs = this.cellSize;
+    // Поднимаем участников поверх остальных плиток.
+    fromTile.setDepth(50);
+    toTile.setDepth(50);
+
+    // Искорки.
+    this.spawnMergeSparks(toCenter, 580);
+
+    // Phase 1: from → центр.
+    scene.tweens.add({
+      targets: fromTile,
+      x: toCenter.x,
+      y: toCenter.y,
+      duration: 60,
+      ease: 'Sine.Out',
+    });
+
+    // Phase 2: разъезд (через 60ms).
+    scene.time.delayedCall(60, () => {
+      scene.tweens.add({
+        targets: fromTile,
+        x: toCenter.x - cs * 0.25,
+        duration: 120,
+        ease: 'Sine.Out',
+      });
+      scene.tweens.add({
+        targets: toTile,
+        x: toCenter.x + cs * 0.25,
+        duration: 120,
+        ease: 'Sine.Out',
+      });
+    });
+
+    // Phase 3: тряска (через 180ms, длится 150ms = 3 yoyo по 25ms).
+    scene.time.delayedCall(180, () => {
+      scene.tweens.add({
+        targets: fromTile,
+        y: toCenter.y + 4,
+        x: toCenter.x - cs * 0.25 - 3,
+        duration: 25,
+        yoyo: true,
+        repeat: 2,
+        ease: 'Sine.InOut',
+      });
+      scene.tweens.add({
+        targets: toTile,
+        y: toCenter.y - 4,
+        x: toCenter.x + cs * 0.25 + 3,
+        duration: 25,
+        yoyo: true,
+        repeat: 2,
+        ease: 'Sine.InOut',
+        delay: 12, // фаза смещена — обе плитки трясутся «не в такт»
+      });
+    });
+
+    // Phase 4: схождение (через 330ms).
+    scene.time.delayedCall(330, () => {
+      scene.tweens.killTweensOf(fromTile);
+      scene.tweens.killTweensOf(toTile);
+      scene.tweens.add({
+        targets: [fromTile, toTile],
+        x: toCenter.x,
+        y: toCenter.y,
+        scaleX: 0.3,
+        scaleY: 0.3,
+        alpha: 0,
+        duration: 110,
+        ease: 'Quad.In',
+        onComplete: () => {
+          // Phase 5: вспышка и финализация.
+          const flash = scene.add
+            .circle(toCenter.x, toCenter.y, cs * 0.4, 0xffffff, 0.9)
+            .setDepth(60)
+            .setBlendMode(Phaser.BlendModes.ADD);
+          scene.tweens.add({
+            targets: flash,
+            scaleX: { from: 0.3, to: 1.8 },
+            scaleY: { from: 0.3, to: 1.8 },
+            alpha: { from: 0.9, to: 0 },
+            duration: 200,
+            ease: 'Quad.Out',
+            onComplete: () => flash.destroy(),
+          });
+          // rebuildTiles внутри callback пересоздаст новую плитку поверх вспышки.
+          onDone();
+          this.animating = false;
+        },
+      });
+    });
+  }
+
+  /** 10 «искр» (ADD-blend белые точки) летят к target с разных радиусов 1.0-1.6 × cellSize. */
+  private spawnMergeSparks(target: { x: number; y: number }, duration: number): void {
+    const COUNT = 10;
+    const cs = this.cellSize;
+    for (let i = 0; i < COUNT; i++) {
+      const angle = (Math.PI * 2 * i) / COUNT + (Math.random() - 0.5) * 0.4;
+      const radius = cs * (1.0 + Math.random() * 0.6);
+      const sx = target.x + Math.cos(angle) * radius;
+      const sy = target.y + Math.sin(angle) * radius;
+      const spark = this.scene.add
+        .circle(sx, sy, 3 + Math.random() * 2, 0xfff4b3, 1)
+        .setDepth(40)
+        .setBlendMode(Phaser.BlendModes.ADD);
+      this.scene.tweens.add({
+        targets: spark,
+        x: target.x,
+        y: target.y,
+        scale: { from: 1, to: 0.2 },
+        alpha: { from: 1, to: 0 },
+        duration: duration * (0.65 + Math.random() * 0.35),
+        ease: 'Quad.In',
+        onComplete: () => spark.destroy(),
+      });
+    }
   }
 
   private applyMove(from: number, to: number): void {

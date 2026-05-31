@@ -242,24 +242,25 @@ export class WorldScene extends Phaser.Scene {
 
   update(_time: number, delta: number): void {
     this.syncTrashRect();
-    if (this.mode !== 'battle' && this.mode !== 'transition') return;
+    // 'showing_result' тоже тикает — пока попап на экране, бойцы/зомби продолжают
+    // движение (retreating анимируется, зомби идут к бойцам у сундука). Тик в этом
+    // режиме не триггерит повторный showResult (allDone-блок гейтится !resultShown).
+    if (this.mode !== 'battle' && this.mode !== 'transition' && this.mode !== 'showing_result') return;
     this.updateCameraFollow();
-    if (this.mode === 'battle') {
+    if (this.mode === 'battle' || this.mode === 'showing_result') {
       try {
         const safeDelta = Math.min(Math.max(0, delta || 0), 50);
         // Применяем speedFactor → slow-mo (×0.5) / norm (×1) / fast (×4). `tweens.
         // timeScale` + `time.timeScale` параллельно ускоряют tween-анимации (chest
         // open, wound flash) — синхронно с per-tick движением.
+        // В режиме showing_result speedFactor мы сбрасываем в 1 (в showResult), поэтому
+        // sub-stepping тут нерелевантен — но цикл всё равно работает корректно.
         const scaledDelta = safeDelta * this.speedFactor;
-        // Sub-stepping: при ×4 один кадр (16ms) → scaledDelta=64ms → за раз бой
-        // мог бы перепрыгнуть ATTACK_RANGE (14px) и проскочить мимо zombie. Дробим
-        // на под-тики ~16ms каждый — collision-check срабатывает корректно.
         const SUB_STEP_MS = 16;
         const steps = Math.max(1, Math.ceil(scaledDelta / SUB_STEP_MS));
         const subDt = scaledDelta / steps;
         for (let i = 0; i < steps; i++) {
           this.tickBattle(subDt);
-          if (this.resultShown) break;
         }
       } catch (e) {
         console.error('[battle] tick failed', e);

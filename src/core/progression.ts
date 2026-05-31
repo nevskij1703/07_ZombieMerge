@@ -6,6 +6,7 @@ import { resizeField, placeFirstFree } from './merge';
 import { getFieldSize, nextFieldSize } from './levelGen';
 import { getBalance } from './balanceRuntime';
 import { isWeaponCellValue, lootboxCode } from './lootbox';
+import { produceCost } from './economy';
 
 /** Арсенал каждой линии = оружие соответствующего столбца поля (сверху вниз).
  *  Лутбоксы в клетках ИГНОРИРУЮТСЯ — у них нет тира, в бой не идут. */
@@ -85,6 +86,13 @@ export function applyBattleResult(state: SaveState, result: BattleResult): void 
 
   if (result.passed) {
     state.stats.battlesWon += 1;
+
+    // Бонус за прохождение уровня (хотя бы один сундук открыт — это и есть `passed`):
+    // +6× от текущей цены производства, округлённое вверх до сотен. Считается ДО
+    // апгрейда Цеха ниже — бонус начисляется по тиру, который игрок видел во время
+    // уровня (workshopTier=1: 10×6=60 → 100; t=3: 20×6=120 → 200; t=4: 28×6=168 → 200).
+    state.scrap += Math.ceil((produceCost(state.workshopTier) * 6) / 100) * 100;
+
     const passedLevel = state.level;
     state.level += 1;
     state.maxLevelReached = Math.max(state.maxLevelReached, state.level);

@@ -762,11 +762,11 @@ export class MergeBoard {
       children.push(tierTxt, nameTxt);
     }
 
-    // Цифра тира в правом нижнем углу: чистая надпись без обводки/тени,
-    // Inter Black 900, цвет #B7916B (тёплый коричневый — единый под всю палитру).
-    // Размер шрифта АДАПТИВНЫЙ: 32px при cellSize 136 (это 3×3 / 2×3 поле — эталон),
-    // на других полях пропорционально (4×4 ≈ 24px, 5×5 ≈ 19px). Минимум 10px для
-    // читаемости на крайних мелких ячейках.
+    // Цифра тира в правом нижнем углу: чистая надпись без обводки/тени, Inter Black
+    // 900. Цвет `rgba(0,0,0,0.65)` — чёрный полупрозрачный, выбран как «универсальный»
+    // на любую подложку (тёмный фон → силуэт виден за счёт полупрозрачности, светлый
+    // → проступает как тёмная цифра). Размер шрифта АДАПТИВНЫЙ: 32px при cellSize
+    // 136 (3×3 / 2×3 поле — эталон), на других полях пропорционально, мин 10px.
     const REFERENCE_CELL_SIZE = 136;
     const REFERENCE_BADGE_FONT = 32;
     const badgeFontPx = Math.max(
@@ -779,7 +779,7 @@ export class MergeBoard {
         fontFamily: 'Inter, Roboto, Arial Black, sans-serif',
         fontStyle: '900',
         fontSize: `${badgeFontPx}px`,
-        color: '#B7916B',
+        color: 'rgba(0, 0, 0, 0.65)',
       })
       .setOrigin(0.5);
     children.push(tierBadge);

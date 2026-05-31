@@ -182,27 +182,37 @@ export class MainScreenUI {
 
     const arrowsIcon = scene.add.image(0, 18, 'ui.arrows').setOrigin(0.5).setDisplaySize(28, 35);
 
+    // Cost группа справа: монета на фиксированной позиции, текст ПРАВО-выровнен
+    // (origin 1, 0.5) — gap между правым краем цифры и левым краем монеты ВСЕГДА
+    // 6 px, не зависит от длины числа («5» / «20» / «999» одинаково).
+    const PRODUCE_COIN_X = 100;
+    const PRODUCE_COIN_SIZE = 26;
+    const COST_TO_COIN_GAP = 6;
+    const PRODUCE_COST_RIGHT_X = PRODUCE_COIN_X - PRODUCE_COIN_SIZE / 2 - COST_TO_COIN_GAP;
     this.produceCostText = scene.add
-      .text(26, 16, '0', {
+      .text(PRODUCE_COST_RIGHT_X, 16, '0', {
         fontFamily: FONT,
         fontStyle: '900',
         fontSize: '32px',
         color: '#FFFFFF',
       })
-      .setOrigin(0, 0.5);
+      .setOrigin(1, 0.5);
     this.produceCostText.setStroke('#000000', 1);
     const produceCoin = scene.add
-      .image(100, 16, 'ui.coin')
+      .image(PRODUCE_COIN_X, 16, 'ui.coin')
       .setOrigin(0.5)
-      .setDisplaySize(26, 26);
+      .setDisplaySize(PRODUCE_COIN_SIZE, PRODUCE_COIN_SIZE);
 
-    this.produceWeaponIcon = scene.add.image(-100, 16, 'weapon.t1').setOrigin(0.5);
+    // Weapon icon сдвинут ближе к стрелкам обмена (с x=-100 → x=-55), tier digit
+    // вместе с ним (правый-нижний угол иконки). Чёрный полупрозрачный — универсал.
+    const PRODUCE_WEAPON_X = -55;
+    this.produceWeaponIcon = scene.add.image(PRODUCE_WEAPON_X, 16, 'weapon.t1').setOrigin(0.5);
     this.produceWeaponTier = scene.add
-      .text(-100 + 20, 16 + 20, '?', {
+      .text(PRODUCE_WEAPON_X + 20, 16 + 20, '?', {
         fontFamily: 'Inter, Roboto, Arial Black, sans-serif',
         fontStyle: '900',
         fontSize: '18px',
-        color: '#B7916B',
+        color: 'rgba(0, 0, 0, 0.65)',
       })
       .setOrigin(0.5);
 

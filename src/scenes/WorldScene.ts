@@ -690,14 +690,16 @@ export class WorldScene extends Phaser.Scene {
         const scale = target / WEAPON_FRAME_PX;
         const icon = this.add.image(0, 0, iconKey).setOrigin(0.5)
           .setDisplaySize(iw * scale, ih * scale);
-        // Tier digit — Inter Black 900, цвет #B7916B без обводки, в правом нижнем
-        // углу. Размер пропорционален size (54 здесь, ~13px против 32px@136 в merge).
+        // Tier digit — Inter Black 900, чёрный полупрозрачный (rgba 0,0,0,0.65 —
+        // тот же стиль, что в merge-плитке: читаемо на любой подложке). Без обводки,
+        // в правом нижнем углу. Размер пропорционален size (54 здесь = ~13px против
+        // 32px@136 в merge).
         const tierFont = Math.max(10, Math.round(size * 32 / 136));
         const tierBadge = this.add.text(size * 0.35, size * 0.35, String(t), {
           fontFamily: 'Inter, Roboto, Arial Black, sans-serif',
           fontStyle: '900',
           fontSize: `${tierFont}px`,
-          color: '#B7916B',
+          color: 'rgba(0, 0, 0, 0.65)',
         }).setOrigin(0.5);
         container.add([icon, tierBadge]);
         container.setScale(0);

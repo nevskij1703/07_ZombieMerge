@@ -181,7 +181,12 @@ export class MergeBoard {
       this.dragTile = tile;
       this.clearSelection();
       this.scene.children.bringToTop(tile);
-      tile.setScale(1.06);
+      tile.setScale(1.08);
+      // Подсветка drag-плитки (сильный glow) + всех такого же тира (мягкий glow).
+      const dragValue = this.field.cells[this.downIndex];
+      if (isWeaponCellValue(dragValue)) {
+        this.highlightTier(dragValue, this.downIndex);
+      }
     }
     if (this.dragTile) this.dragTile.setPosition(pointer.worldX, pointer.worldY);
   }
@@ -195,6 +200,9 @@ export class MergeBoard {
 
     if (wasDragging && dragTile) {
       dragTile.setScale(1);
+      // Снимаем подсветку до resolveDrop — rebuildTiles внутри его всё пересоздаст, но
+      // на случай ранних `return` (drop вне поля без trash) подстрахуемся.
+      this.unhighlightAll();
       this.resolveDrop(from, this.pointerCell(pointer), pointer.worldX, pointer.worldY);
     } else {
       this.handleTap(from);
@@ -288,21 +296,51 @@ export class MergeBoard {
     this.selectedIndex = index;
     const tile = this.tileByIndex.get(index);
     if (!tile) return;
-    // Без bg-рамки выделение — это scale-пульс + тёплый тинт на иконке оружия.
     tile.setScale(1.08);
-    const icon = tile.getData('icon') as Phaser.GameObjects.Image | undefined;
-    icon?.setTint(0xfff7c0);
+    const v = this.field.cells[index];
+    if (isWeaponCellValue(v)) this.highlightTier(v, index);
   }
 
   private clearSelection(): void {
     if (this.selectedIndex === null) return;
     const tile = this.tileByIndex.get(this.selectedIndex);
-    if (tile) {
-      tile.setScale(1);
-      const icon = tile.getData('icon') as Phaser.GameObjects.Image | undefined;
-      icon?.clearTint();
-    }
+    if (tile) tile.setScale(1);
+    this.unhighlightAll();
     this.selectedIndex = null;
+  }
+
+  /**
+   * Подсветить ВСЕ плитки указанного тира на мердж-поле:
+   *   • `primaryIndex` — выделенная/перетаскиваемая плитка → сильный glow (видно, что
+   *     именно она «активна»).
+   *   • остальные с таким же тиром → слабый glow (подсказка «эту можно слить с этой»).
+   *
+   * Используется PreFX.addGlow — WebGL шейдер, рисует ауру вокруг непрозрачных пикселей
+   * иконки. На canvas-рендере отсутствует (preFX будет undefined) — silently skip.
+   */
+  private highlightTier(tier: WeaponTier, primaryIndex: number): void {
+    for (const [idx, tile] of this.tileByIndex) {
+      const v = this.field.cells[idx];
+      if (!isWeaponCellValue(v) || v !== tier) continue;
+      const icon = tile.getData('icon') as Phaser.GameObjects.Image | undefined;
+      if (!icon?.preFX) continue;
+      icon.preFX.clear();
+      if (idx === primaryIndex) {
+        // Сильное белое свечение для активной плитки.
+        icon.preFX.addGlow(0xffffff, 8, 2, false, 0.1, 16);
+      } else {
+        // Подсказка «такого же тира» — мягче.
+        icon.preFX.addGlow(0xffffff, 4, 0, false, 0.1, 10);
+      }
+    }
+  }
+
+  /** Снять glow со всех weapon-плиток поля. Безопасно вызывать многократно. */
+  private unhighlightAll(): void {
+    for (const [, tile] of this.tileByIndex) {
+      const icon = tile.getData('icon') as Phaser.GameObjects.Image | undefined;
+      icon?.preFX?.clear();
+    }
   }
 
   // --- Геометрия и рендер ---
